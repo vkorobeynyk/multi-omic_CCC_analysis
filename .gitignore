@@ -1,0 +1,30 @@
+# ---- Raw / processed data (too large for GitHub, regenerable from scripts) ----
+STARmap_PLUS_data/
+visium_processed/
+visium_clustered/
+ref_export/
+rctd_by_region/
+starmap_plus_processed/
+RCTD_output/
+nichenet_cache/
+*.rds
+*.RDS
+*.mtx
+*.h5ad
+
+# ---- Rendered reports and Quarto/R/Jupyter leftovers ----
+*.html
+*_files/
+.quarto/
+*.rmarkdown
+.Rhistory
+.RData
+.Rproj.user/
+.ipynb_checkpoints/
+omnipathr-log/
+
+# ---- Generated figures ----
+# pathview (06) writes KEGG maps into the working directory
+mmu*.png
+mmu*.xml
+Claude outputs/

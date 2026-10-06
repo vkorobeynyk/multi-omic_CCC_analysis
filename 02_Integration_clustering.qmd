@@ -1,0 +1,162 @@
+---
+title: "Merge, Integrate, and Cluster Hippocampus Visium Samples"
+subtitle: "Goal: identify anatomical subregions (GCL, ML, CA1, CA2, CA3, hilus, etc.)"
+format:
+  html:
+    toc: true
+    code-fold: false
+    embed-resources: true
+execute:
+  warning: false
+  message: false
+---
+
+## Setup
+
+```{r libraries}
+library(Seurat)
+library(harmony)
+library(dplyr)
+library(purrr)
+library(ggplot2)
+library(patchwork)
+library(readr)
+```
+
+```{r paths}
+processed_dir <- "visium_processed"  # from the QC/region-selection script
+out_dir <- "visium_clustered"
+dir.create(out_dir, showWarnings = FALSE)
+
+rds_files <- list.files(processed_dir, pattern = "_QC_hippocampus\\.rds$", full.names = TRUE)
+sample_names <- gsub("_QC_hippocampus\\.rds$", "", basename(rds_files))
+names(rds_files) <- sample_names
+
+rds_files
+```
+
+## Step 1: Load all processed samples
+
+```{r load-samples}
+seurat_list <- map(rds_files, readRDS)
+```
+
+## Step 2: Normalize each sample individually (SCTransform)
+
+Run SCTransform per sample *before* merging — this keeps each sample's variance stabilization
+appropriate to its own sequencing depth, which matters given your young/middle/old comparison.
+
+```{r sctransform, warning=FALSE}
+seurat_list <- map(seurat_list, function(sp_obj) {
+  SCTransform(sp_obj, assay = "Spatial", verbose = FALSE)
+})
+```
+
+## Step 3: Merge all samples into one object
+
+```{r merge}
+merged_obj <- merge(
+  x = seurat_list[[1]],
+  y = seurat_list[-1],
+  add.cell.ids = names(seurat_list)
+)
+
+# carry over the correct variable features from SCT across all samples
+VariableFeatures(merged_obj) <- SelectIntegrationFeatures(seurat_list, nfeatures = 3000)
+
+names(merged_obj@images) <- names(seurat_list)
+```
+
+## Step 4: PCA, then Harmony integration across samples
+
+Batch effects across 16 slides (and across age groups) will otherwise dominate clustering, so
+we integrate on `sample` before finding clusters - this ensures clusters reflect tissue biology
+(region), not which slide a spot came from.
+
+```{r pca-harmony}
+merged_obj <- RunPCA(merged_obj, assay = "SCT", npcs = 30, verbose = FALSE)
+
+merged_obj <- RunHarmony(
+  merged_obj,
+  group.by.vars = "sample",
+  assay.use = "SCT",
+  reduction.use = "pca",
+  reduction.save = "harmony"
+)
+```
+
+## Step 5: Clustering and UMAP on the integrated embedding
+
+```{r clustering}
+merged_obj <- FindNeighbors(merged_obj, reduction = "harmony", dims = 1:30)
+
+# ---- EDIT: resolution controls how many clusters you get - start moderate, adjust after inspecting ----
+merged_obj <- FindClusters(merged_obj, resolution = 0.15)
+
+merged_obj <- RunUMAP(merged_obj, reduction = "harmony", dims = 1:30)
+```
+
+```{r umap-plot, fig.width=8, fig.height=6}
+DimPlot(merged_obj, reduction = "umap", group.by = "seurat_clusters", label = TRUE) +
+  ggtitle("Clusters across all samples")
+
+DimPlot(merged_obj, reduction = "umap", group.by = "age") +
+  ggtitle("Colored by age - check clusters aren't just splitting by age")
+
+# rename clusters
+merged_obj$region <- dplyr::case_when(
+  merged_obj$seurat_clusters == "0" ~ "ML",
+  merged_obj$seurat_clusters == "1" ~ "CA1_2",
+  merged_obj$seurat_clusters == "2" ~ "CA3",
+  merged_obj$seurat_clusters == "3" ~ "DG",
+  TRUE ~ as.character(merged_obj$seurat_clusters)
+)
+
+DimPlot(merged_obj, reduction = "umap", group.by = "region") +
+  ggtitle("Colored by age - check clusters aren't just splitting by age")
+
+
+merged_obj$region <- factor(merged_obj$region)
+
+table(merged_obj$region)
+```
+
+## Step 6: Visualize clusters spatially per sample
+
+This is the key step for region identification - clusters should form spatially coherent,
+anatomically sensible patches (e.g. a thin curved band = GCL) if integration worked well.
+
+```{r spatial-cluster-plots, fig.width=6, fig.height=6, warning=FALSE}
+for (sample_name in names(seurat_list)) {
+  sub_obj <- subset(merged_obj, subset = sample == sample_name)
+  print(
+    SpatialDimPlot(sub_obj, label = TRUE, label.size = 3, group.by = "region") +
+      ggtitle(sample_name)
+  )
+}
+```
+
+## Step 7: Check known hippocampal region markers directly
+
+Cross-reference clusters against canonical markers rather than relying on marker discovery alone.
+
+```{r known-markers, fig.width=10, fig.height=8}
+# ---- EDIT: adjust/expand based on what's in your data ----
+region_markers <- c(
+  "Prox1",   # granule cell layer (GCL)
+  "Dcx",     # immature neurons / neurogenic lineage
+  "Gfap",    # astrocytes, often enriched near molecular layer / SGZ
+  "Wfs1",    # CA1 pyramidal (if present)
+  "Neurod6"  # broad excitatory neuron marker
+)
+
+present_markers <- intersect(region_markers, rownames(merged_obj))
+
+FeaturePlot(merged_obj, features = present_markers, reduction = "umap")
+```
+
+## Step 8: Save the merged, clustered object
+
+```{r save}
+saveRDS(merged_obj, file.path(out_dir, "merged_hippocampus_clustered.rds"))
+```

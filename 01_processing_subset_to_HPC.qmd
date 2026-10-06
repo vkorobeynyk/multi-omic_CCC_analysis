@@ -1,0 +1,195 @@
+---
+title: "Visium QC and Hippocampus Region Selection"
+subtitle: "Samples: Y, M, O_1, O_2 (4 slides each = 16 total)"
+format:
+  html:
+    toc: true
+    code-fold: false
+    embed-resources: true
+execute:
+  warning: false
+  message: false
+---
+
+## Setup
+
+```{r libraries}
+library(Seurat)
+library(dplyr)
+library(tidyr)
+library(purrr)
+library(ggplot2)
+library(patchwork)
+library(readr)
+library(tibble)
+```
+
+```{r paths}
+# ---- EDIT THESE PATHS ----
+sample_dirs <- c(
+  Y   = "/home/vkorob/Documents/data_scripts/visium/Visium_SJ_3ages/Y",
+  M   = "/home/vkorob/Documents/data_scripts/visium/Visium_SJ_3ages/M",
+  O_1 = "/home/vkorob/Documents/data_scripts/visium/Visium_SJ_3ages/O_1/",
+  O_2 = "/home/vkorob/Documents/data_scripts/visium/Visium_SJ_3ages/O_2/"
+)
+
+age_lookup <- c(Y = "young", M = "middle", O_1 = "old", O_2 = "old")
+
+out_dir <- "visium_processed"
+dir.create(out_dir, showWarnings = FALSE)
+
+# find the slide subfolders inside each age/replicate directory
+slide_df <- imap_dfr(sample_dirs, function(dir_path, group_name) {
+  slide_paths <- list.dirs(dir_path, recursive = FALSE, full.names = TRUE)
+  tibble(
+    group  = group_name,
+    slide  = basename(slide_paths),
+    path   = slide_paths,
+    sample = paste(group_name, basename(slide_paths), sep = "_"),
+    age    = age_lookup[[group_name]]
+  )
+})
+
+spatial_dirs    <- setNames(slide_df$path, slide_df$sample)
+age_lookup_full <- setNames(slide_df$age, slide_df$sample)
+
+slide_df
+```
+
+## Step 1: Load each slide and compute QC metrics
+
+```{r load-and-qc}
+load_and_qc <- function(sample_dir, sample_name) {
+
+  message("Loading: ", sample_name)
+  sp_obj <- Load10X_Spatial(data.dir = sample_dir)
+  sp_obj$sample <- sample_name
+  sp_obj$age    <- age_lookup_full[[sample_name]]
+
+  # mitochondrial content - adjust pattern if not mouse ("^mt-")
+  sp_obj[["percent.mt"]] <- PercentageFeatureSet(sp_obj, pattern = "^mt-")
+
+  sp_obj
+}
+
+seurat_list <- imap(spatial_dirs, load_and_qc)
+```
+
+## Step 2: Visualize QC metrics per sample (before filtering)
+
+```{r qc-plots-before, fig.width=12, fig.height=5}
+for (sample_name in names(seurat_list)) {
+  sp_obj <- seurat_list[[sample_name]]
+
+  p1 <- VlnPlot(sp_obj, features = "nCount_Spatial", pt.size = 0) + NoLegend()
+  p2 <- VlnPlot(sp_obj, features = "nFeature_Spatial", pt.size = 0) + NoLegend()
+  p3 <- VlnPlot(sp_obj, features = "percent.mt", pt.size = 0) + NoLegend()
+
+  print((p1 | p2 | p3) + plot_annotation(title = sample_name))
+}
+```
+
+## Step 3: Apply QC thresholds
+
+```{r qc-filter, eval=FALSE}
+# ---- EDIT: set thresholds appropriate for your tissue/depth ----
+min_counts  <- 500
+min_features <- 200
+max_mt_pct  <- 20
+
+qc_summary <- imap_dfr(seurat_list, function(sp_obj, sample_name) {
+  n_before <- ncol(sp_obj)
+  tibble(sample = sample_name, n_spots_before = n_before)
+})
+
+seurat_list <- imap(seurat_list, function(sp_obj, sample_name) {
+  sp_obj <- subset(
+    sp_obj,
+    subset = nCount_Spatial >= min_counts &
+             nFeature_Spatial >= min_features &
+             percent.mt <= max_mt_pct
+  )
+  sp_obj
+})
+
+qc_summary <- qc_summary %>%
+  left_join(
+    imap_dfr(seurat_list, ~ tibble(sample = .y, n_spots_after = ncol(.x))),
+    by = "sample"
+  ) %>%
+  mutate(pct_retained = round(100 * n_spots_after / n_spots_before, 1))
+
+qc_summary
+write_csv(qc_summary, file.path(out_dir, "qc_summary.csv"))
+```
+
+## Step 4: Manual hippocampus selection (via Loupe Browser)
+
+**Before running this chunk:**
+
+1. Open each slide in **10x Loupe Browser** (`.cloupe` file, or the raw output folder).
+2. Use the lasso/polygon selection tool to manually outline the hippocampus on the H&E image.
+3. Export the selected barcodes: *Selections panel → Export Barcodes as CSV*.
+4. Save each file into the `loupe_barcodes/` folder, named `<sample>_hippocampus_barcodes.csv`
+   (e.g. `Y_A1_hippocampus_barcodes.csv`), with a single column of barcodes.
+
+```{r manual-region-selection, warning=FALSE}
+subset_to_hippocampus <- function(sample_name, sp_obj, barcode_dir) {
+
+  barcode_file1 <- file.path(barcode_dir, "HPC_coords_1.csv")
+
+  if (!file.exists(barcode_file)) {
+    warning("No barcode file found for ", sample_name, " - skipping region subset")
+    return(sp_obj)
+  }
+
+  keep_barcodes <- read_csv(barcode_file1, show_col_types = FALSE)[[1]]
+  
+  if("HPC_coords_2.csv" %in% list.files(barcode_dir)) {
+    barcode_file2 <- file.path(barcode_dir, "HPC_coords_1.csv")
+    keep_barcodes2 = read_csv(barcode_file2, show_col_types = FALSE)[[1]]
+    
+    keep_barcodes = c(keep_barcodes, keep_barcodes2)
+  }
+  
+  keep_barcodes <- intersect(keep_barcodes, colnames(sp_obj))
+
+  message(sample_name, ": keeping ", length(keep_barcodes), " / ", ncol(sp_obj), " spots (hippocampus)")
+
+  subset(sp_obj, cells = keep_barcodes)
+}
+
+for (sample_name in names(seurat_list)) {
+  seurat_list[[sample_name]] <- subset_to_hippocampus(
+    sample_name,
+    seurat_list[[sample_name]],
+    spatial_dirs[sample_name]
+  )
+}
+```
+
+## Step 5: Confirm the crop looks right
+
+```{r qc-plots-region, fig.width=6, fig.height=6}
+for (sample_name in names(seurat_list)) {
+  sp_obj <- seurat_list[[sample_name]]
+  print(SpatialDimPlot(sp_obj, alpha = 0.6) + ggtitle(paste(sample_name, "- hippocampus only")))
+}
+```
+
+## Step 6: Save processed objects
+
+```{r save-outputs}
+for (sample_name in names(seurat_list)) {
+  saveRDS(seurat_list[[sample_name]], file.path(out_dir, paste0(sample_name, "_QC_hippocampus.rds")))
+}
+
+final_summary <- imap_dfr(seurat_list, ~ tibble(
+  sample = .y,
+  age = age_lookup_full[[.y]],
+  n_spots_final = ncol(.x)
+))
+
+final_summary
+write_csv(final_summary, file.path(out_dir, "final_spot_counts.csv"))
+```
