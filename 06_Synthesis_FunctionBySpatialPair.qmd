@@ -1,0 +1,508 @@
+---
+title: "Synthesis: Which Functions Does Each Cell-Type Pair's LR List Point To?"
+subtitle: "KEGG pathway membership (04) and STRING GO Biological Process enrichment (05), combined into one spatial_pair x function view"
+date: today
+format:
+  html:
+    theme: flatly
+    toc: true
+    toc-depth: 3
+    toc-location: left
+    toc-expand: true
+    number-sections: true
+    code-fold: true
+    code-summary: "Show code"
+    code-tools: true
+    code-overflow: wrap
+    code-line-numbers: false
+    df-print: paged
+    fig-align: center
+    fig-width: 9
+    fig-height: 6
+    anchor-sections: true
+    smooth-scroll: true
+    embed-resources: true
+grid:
+  body-width: 1100px
+execute:
+  warning: false
+  message: false
+  echo: true
+---
+
+## Overview
+
+Combines the exports of `04` (KEGG pathway membership) and `05` (STRING GO Biological Process enrichment on the whole curated gene set) into one table of (`spatial_pair`, gene, function), and summarises which functions each cell-type pair's significant LR genes point to.
+
+Outputs:
+
+- `function_convergence` -- every function, with how many `spatial_pair`s and genes hit it;
+- `pair_summary` -- top functions per `spatial_pair`;
+- a heatmap of `spatial_pair` x function, for functions shared by 2+ pairs that are concentrated in one or a few of them.
+
+Run `04` and `05` first.
+
+```{r setup}
+library(dplyr)
+library(readr)
+library(tibble)
+library(ggplot2)
+```
+
+## Load exports
+
+```{r load-exports}
+kegg_gene_pathway     <- read_csv(file.path("output", "04_KEGG_PathwayConvergence", "kegg_gene_pathway_by_pair.csv"), show_col_types = FALSE)
+kegg_convergence      <- read_csv(file.path("output", "04_KEGG_PathwayConvergence", "kegg_convergence_pathways.csv"), show_col_types = FALSE)
+string_enrichment_all <- read_csv(file.path("output", "05_STRING_NetworkAnalysis", "string_whole_network_enrichment.csv"), show_col_types = FALSE)
+```
+
+`spatial_pair` per gene is rebuilt from `significant_lr_pairs.csv`.
+
+```{r rebuild-lr-genes-long}
+split_complex <- function(x) stringr::str_split(x, "_")
+
+sig_pairs <- readr::read_csv(file.path("output", "03_RCTD_SpotDeconvolution", "significant_lr_pairs.csv"), show_col_types = FALSE) %>%
+  distinct(spatial_pair, ligand_complex, receptor_complex)
+
+lr_gene_sets <- purrr::pmap(sig_pairs, function(spatial_pair, ligand_complex, receptor_complex) {
+  ligands   <- unlist(split_complex(ligand_complex))
+  receptors <- unlist(split_complex(receptor_complex))
+  tibble(spatial_pair = spatial_pair, gene = unique(c(ligands, receptors)))
+})
+
+lr_genes_long <- bind_rows(lr_gene_sets) %>% distinct(spatial_pair, gene)
+lr_genes_long
+```
+
+## STRING GO Biological Process membership
+
+GO Biological Process terms from the STRING enrichment, with the genes supporting each term.
+
+```{r string-process-membership}
+fdr_col   <- intersect(c("fdr", "false_discovery_rate", "p_value"), names(string_enrichment_all))[1]
+cat_col   <- intersect(c("category"), names(string_enrichment_all))[1]
+desc_col  <- intersect(c("description"), names(string_enrichment_all))[1]
+term_col  <- intersect(c("term"), names(string_enrichment_all))[1]
+genes_col <- intersect(c("preferredNames", "inputGenes", "genes"), names(string_enrichment_all))[1]
+
+if (is.na(cat_col) || is.na(genes_col) || is.na(term_col) || is.na(desc_col)) {
+  stop("Couldn't find the expected columns in string_whole_network_enrichment.csv. ",
+       "Columns present: ", paste(names(string_enrichment_all), collapse = ", "))
+}
+
+string_process_gene <- string_enrichment_all %>%
+  dplyr::filter(.data[[cat_col]] == "Process") %>%
+  transmute(
+    function_id   = .data[[term_col]],
+    function_name = .data[[desc_col]],
+    fdr           = .data[[fdr_col]],
+    gene          = stringr::str_split(.data[[genes_col]], ",\\s*")
+  ) %>%
+  tidyr::unnest(gene) %>%
+  distinct(function_id, function_name, gene)
+
+string_process_gene
+```
+
+## Drop overly generic GO terms
+
+Broad terms near the top of the GO hierarchy ("regulation of cellular process") are enriched in almost any gene set. Terms with more than `max_background_genes` genes genome-wide are removed.
+
+```{r string-specificity-filter}
+bg_col <- intersect(
+  c("number_of_genes_in_background", "background_gene_count", "bgCount", "genesInBackground"),
+  names(string_enrichment_all)
+)[1]
+
+if (is.na(bg_col)) {
+
+  message("No genome-wide background-size column found -- specificity filter skipped.")
+
+} else {
+
+  process_bg <- string_enrichment_all %>%
+    dplyr::filter(.data[[cat_col]] == "Process") %>%
+    dplyr::transmute(function_id = .data[[term_col]], background_size = .data[[bg_col]])
+
+  max_background_genes <- 300   # lower = only more specific terms survive
+
+  q <- stats::quantile(process_bg$background_size, probs = c(0, 0.25, 0.5, 0.75, 1))
+  n_before <- dplyr::n_distinct(process_bg$function_id)
+  keep_ids <- process_bg %>% dplyr::filter(background_size <= max_background_genes) %>% dplyr::pull(function_id)
+  n_after  <- length(unique(keep_ids))
+
+  message(
+    "Term size quantiles (", n_before, " terms): ",
+    paste(names(q), q, sep = " = ", collapse = ", "),
+    ". Keeping <= ", max_background_genes, " genes: ", n_after, " of ", n_before, " terms."
+  )
+
+  string_process_gene <- string_process_gene %>% dplyr::filter(function_id %in% keep_ids)
+}
+
+string_process_gene
+```
+
+## Collapse STRING terms with identical gene evidence
+
+Nested GO terms ("regulation of X", "positive regulation of X") are often supported by exactly the same genes. Terms with an identical set of `spatial_pair`:gene evidence are merged into one row, named after the shortest term.
+
+```{r string-collapse}
+string_gene_level <- string_process_gene %>%
+  inner_join(lr_genes_long, by = "gene", relationship = "many-to-many") %>%
+  distinct(spatial_pair, gene, function_id, function_name)
+
+string_signature <- string_gene_level %>%
+  mutate(evidence = paste0(spatial_pair, ":", gene)) %>%
+  group_by(function_id, function_name) %>%
+  summarise(signature = paste(sort(unique(evidence)), collapse = "|"), .groups = "drop")
+
+string_signature_groups <- string_signature %>%
+  group_by(signature) %>%
+  summarise(
+    n_terms              = n(),
+    term_names           = paste(sort(function_name), collapse = "; "),
+    representative_id    = function_id[which.min(nchar(function_name))],
+    representative_name  = function_name[which.min(nchar(function_name))],
+    .groups = "drop"
+  ) %>%
+  arrange(desc(n_terms))
+
+string_id_to_group <- string_signature %>%
+  left_join(
+    string_signature_groups %>% dplyr::select(signature, representative_id, representative_name, n_terms),
+    by = "signature"
+  )
+
+string_signature_groups %>% dplyr::select(representative_name, n_terms, term_names)
+```
+
+## Reduce STRING terms by semantic similarity (rrvgo)
+
+Merges GO terms that are closely related in the GO graph even if their genes differ slightly (`rrvgo`, the method behind REVIGO). The most significant term (lowest FDR) names each group. Needs `rrvgo`, `GOSemSim` and `org.Mm.eg.db`.
+
+```{r string-semantic-reduce}
+if (!requireNamespace("BiocManager", quietly = TRUE)) install.packages("BiocManager")
+for (pkg in c("rrvgo", "GOSemSim", "org.Mm.eg.db")) {
+  if (!requireNamespace(pkg, quietly = TRUE)) BiocManager::install(pkg, update = FALSE, ask = FALSE)
+}
+
+rep_terms <- string_signature_groups %>% dplyr::distinct(representative_id, representative_name)
+
+# -log10(FDR): higher score = preferred as group label
+term_fdr <- string_enrichment_all %>%
+  dplyr::filter(.data[[cat_col]] == "Process") %>%
+  dplyr::transmute(function_id = .data[[term_col]], fdr = .data[[fdr_col]])
+
+scores <- term_fdr$fdr[match(rep_terms$representative_id, term_fdr$function_id)]
+scores <- setNames(-log10(pmax(scores, 1e-300)), rep_terms$representative_id)
+
+simMatrix <- rrvgo::calculateSimMatrix(
+  rep_terms$representative_id,
+  orgdb  = "org.Mm.eg.db",
+  ont    = "BP",
+  method = "Rel"
+)
+
+semantic_similarity_threshold <- 0.7   # rrvgo: 0.9 large, 0.7 medium, 0.5 small, 0.4 tiny groups
+
+reduced_terms <- rrvgo::reduceSimMatrix(
+  simMatrix,
+  scores[rownames(simMatrix)],
+  threshold = semantic_similarity_threshold,
+  orgdb     = "org.Mm.eg.db"
+)
+
+string_semantic_group <- tibble::as_tibble(reduced_terms) %>%
+  dplyr::transmute(representative_id = go, semantic_parent_id = parent, semantic_parent_name = parentTerm)
+
+# every raw GO term now maps to one final group (identical-evidence + semantic merging)
+string_id_to_group <- string_id_to_group %>%
+  dplyr::left_join(string_semantic_group, by = "representative_id") %>%
+  dplyr::mutate(
+    final_id   = dplyr::coalesce(semantic_parent_id, representative_id),
+    final_name = dplyr::coalesce(semantic_parent_name, representative_name)
+  )
+
+final_group_sizes <- string_id_to_group %>% dplyr::count(final_id, name = "n_terms_final")
+
+string_id_to_group <- string_id_to_group %>%
+  dplyr::select(-n_terms) %>%
+  dplyr::left_join(final_group_sizes, by = "final_id") %>%
+  dplyr::rename(n_terms = n_terms_final)
+
+string_id_to_group %>%
+  dplyr::distinct(final_name, n_terms) %>%
+  dplyr::arrange(dplyr::desc(n_terms))
+```
+
+## Collapse KEGG pathways with identical gene evidence
+
+Hub genes (`Itgb1`, `App`, `Apoe`, …) sit in dozens of KEGG maps, many of them disease or infection maps, so the same few genes repeat across many pathways. Pathways with identical `spatial_pair`:gene evidence are merged into one row.
+
+```{r kegg-collapse}
+kegg_gene_level <- kegg_gene_pathway %>%
+  distinct(spatial_pair, gene, pathway_id, pathway_name)
+
+kegg_signature <- kegg_gene_level %>%
+  mutate(evidence = paste0(spatial_pair, ":", gene)) %>%
+  group_by(pathway_id, pathway_name) %>%
+  summarise(signature = paste(sort(unique(evidence)), collapse = "|"), .groups = "drop")
+
+kegg_signature_groups <- kegg_signature %>%
+  group_by(signature) %>%
+  summarise(
+    n_pathways           = n(),
+    pathway_names        = paste(sort(pathway_name), collapse = "; "),
+    representative_id    = pathway_id[which.min(nchar(pathway_name))],
+    representative_name  = pathway_name[which.min(nchar(pathway_name))],
+    .groups = "drop"
+  ) %>%
+  arrange(desc(n_pathways))
+
+kegg_id_to_group <- kegg_signature %>%
+  left_join(
+    kegg_signature_groups %>% dplyr::select(signature, representative_id, representative_name, n_pathways),
+    by = "signature"
+  )
+
+kegg_signature_groups %>% dplyr::select(representative_name, n_pathways, pathway_names)
+```
+
+## Combined (spatial_pair, gene, function) table
+
+Merged groups are labelled "name (+N more)".
+
+```{r combine}
+kegg_long <- kegg_gene_level %>%
+  left_join(
+    kegg_id_to_group %>% dplyr::select(pathway_id, representative_id, representative_name, n_pathways),
+    by = "pathway_id"
+  ) %>%
+  transmute(
+    function_source = "KEGG pathway",
+    function_id     = representative_id,
+    function_name   = if_else(
+      n_pathways > 1,
+      paste0(representative_name, " (+", n_pathways - 1, " more)"),
+      representative_name
+    ),
+    spatial_pair,
+    gene
+  ) %>%
+  distinct()
+
+string_long <- string_gene_level %>%
+  left_join(
+    string_id_to_group %>% dplyr::select(function_id, final_id, final_name, n_terms),
+    by = "function_id"
+  ) %>%
+  transmute(
+    function_source = "STRING: Biological Process",
+    function_id     = final_id,
+    function_name   = if_else(
+      n_terms > 1,
+      paste0(final_name, " (+", n_terms - 1, " more)"),
+      final_name
+    ),
+    spatial_pair,
+    gene
+  ) %>%
+  distinct()
+
+function_by_pair_long <- bind_rows(kegg_long, string_long)
+function_by_pair_long
+```
+
+## Function-level convergence
+
+```{r function-convergence}
+function_convergence <- function_by_pair_long %>%
+  distinct(function_source, function_id, function_name, spatial_pair, gene) %>%
+  group_by(function_source, function_id, function_name) %>%
+  summarise(
+    n_spatial_pairs_hitting_it = n_distinct(spatial_pair),
+    n_distinct_genes           = n_distinct(gene),
+    spatial_pairs               = paste(sort(unique(spatial_pair)), collapse = ", "),
+    genes                       = paste(sort(unique(gene)), collapse = ", "),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(n_spatial_pairs_hitting_it), desc(n_distinct_genes))
+
+# function_name is not unique (a KEGG name can equal a STRING description), so build a
+# unique display label: "KEGG: ..." / "STRING: ...", plus the id if still duplicated
+name_collisions <- function_convergence %>% dplyr::count(function_name) %>% dplyr::filter(n > 1)
+if (nrow(name_collisions) > 0) {
+  message(nrow(name_collisions), " function_name value(s) shared by more than one function_id: ",
+          paste(name_collisions$function_name, collapse = "; "))
+}
+
+function_labels <- function_convergence %>%
+  dplyr::distinct(function_id, function_name, function_source) %>%
+  dplyr::mutate(
+    source_prefix = dplyr::case_when(
+      function_source == "KEGG pathway"                ~ "KEGG: ",
+      function_source == "STRING: Biological Process"  ~ "STRING: ",
+      TRUE                                              ~ paste0(function_source, ": ")
+    ),
+    function_label = paste0(source_prefix, function_name)
+  ) %>%
+  dplyr::group_by(function_label) %>%
+  dplyr::mutate(function_label = if (dplyr::n() > 1) paste0(function_label, " [", function_id, "]") else function_label) %>%
+  dplyr::ungroup() %>%
+  dplyr::select(function_id, function_label)
+
+function_convergence <- function_convergence %>%
+  dplyr::left_join(function_labels, by = "function_id")
+
+function_convergence
+```
+
+## Per-spatial-pair summary
+
+Number of functions per pair, and its top 3 functions (most shared across pairs first).
+
+```{r pair-summary}
+pair_function_ranked <- function_by_pair_long %>%
+  distinct(spatial_pair, function_source, function_id, function_name) %>%
+  left_join(
+    function_convergence %>% dplyr::select(function_id, function_label, n_spatial_pairs_hitting_it, n_distinct_genes),
+    by = "function_id"
+  ) %>%
+  arrange(spatial_pair, desc(n_spatial_pairs_hitting_it), desc(n_distinct_genes), function_label)
+
+pair_summary <- pair_function_ranked %>%
+  group_by(spatial_pair) %>%
+  summarise(
+    n_kegg_pathways        = n_distinct(function_id[function_source == "KEGG pathway"]),
+    n_string_bio_processes = n_distinct(function_id[function_source == "STRING: Biological Process"]),
+    top_functions          = paste(head(function_label, 3), collapse = "; "),
+    .groups = "drop"
+  )
+
+pair_summary
+```
+
+## Specificity of each function, corrected for gene-pool size
+
+Pairs have very different numbers of genes (Astrocyte-Vascular many, Neurogenic_lineage-GC few), so raw gene counts favour large pairs. For each function, each pair's **coverage** (its genes on the function / its total genes) is computed first, and `specificity_score` is that pair's share of the summed coverage. Contributions of a single gene are dropped.
+
+```{r pair-gene-pools}
+pair_gene_pool_size <- lr_genes_long %>% dplyr::count(spatial_pair, name = "pool_size")
+pair_gene_pool_size
+```
+
+```{r specificity}
+pair_function_specificity <- function_by_pair_long %>%
+  distinct(function_source, function_id, function_name, spatial_pair, gene) %>%
+  group_by(function_source, function_id, function_name, spatial_pair) %>%
+  summarise(n_genes = n_distinct(gene), .groups = "drop") %>%
+  filter(n_genes > 1) %>%   # drop single-gene contributions before computing shares
+  left_join(pair_gene_pool_size, by = "spatial_pair") %>%
+  mutate(pair_coverage = n_genes / pool_size) %>%
+  group_by(function_id) %>%
+  mutate(
+    total_genes_all_pairs = sum(n_genes),
+    raw_gene_share        = n_genes / total_genes_all_pairs,     # uncorrected, for reference
+    specificity_score     = pair_coverage / sum(pair_coverage)   # pool-size-corrected share
+  ) %>%
+  ungroup() %>%
+  left_join(function_labels, by = "function_id") %>%
+  arrange(desc(n_genes), desc(specificity_score))
+
+pair_function_specificity
+```
+
+### Keep functions that differ between pairs
+
+Functions split evenly across pairs say little. `specificity_range` (max − min `specificity_score` across contributing pairs) must be at least `min_specificity_range`; functions with a single contributing pair count as fully specific.
+
+```{r specificity-spread}
+function_specificity_spread <- pair_function_specificity %>%
+  group_by(function_id) %>%
+  summarise(
+    n_pairs_contributing = dplyr::n(),
+    specificity_range    = if (dplyr::n() > 1) max(specificity_score) - min(specificity_score) else 1,
+    .groups = "drop"
+  )
+
+min_specificity_range <- 0.3   # 0 = keep all; higher = only functions concentrated in one pair
+
+differential_ids <- function_specificity_spread %>%
+  dplyr::filter(specificity_range >= min_specificity_range) %>%
+  dplyr::pull(function_id)
+
+message(length(differential_ids), " of ", nrow(function_specificity_spread),
+        " functions pass the spread cutoff (>= ", min_specificity_range, ").")
+
+function_specificity_spread %>% dplyr::arrange(desc(specificity_range))
+```
+
+## Heatmap: spatial_pair x function
+
+Functions hit by 2+ pairs that pass the spread filter. Colour and percentage = `specificity_score`; number in brackets = genes.
+
+```{r heatmap-data}
+# column order; a pair left out here is only hidden from the plot
+spatial_pair_order <- c("Astrocyte-Vascular", "Vascular-Microglia",
+                         "OPC-Cajal-Retzius", "Neurogenic_lineage-GC")
+
+convergent_ids <- function_convergence %>%
+  filter(n_spatial_pairs_hitting_it >= 2, function_id %in% differential_ids) %>%
+  pull(function_id)
+
+heatmap_data <- function_by_pair_long %>%
+  filter(function_id %in% convergent_ids) %>%
+  distinct(spatial_pair, function_id, gene) %>%
+  group_by(spatial_pair, function_id) %>%
+  summarise(n_genes = n_distinct(gene), .groups = "drop") %>%
+  filter(n_genes > 1) %>%
+  left_join(function_labels, by = "function_id")
+
+# rows ordered by convergence, most-shared first
+function_order <- function_convergence %>%
+  filter(function_id %in% unique(heatmap_data$function_id)) %>%
+  arrange(desc(n_spatial_pairs_hitting_it), desc(n_distinct_genes)) %>%
+  pull(function_label)
+
+heatmap_data <- heatmap_data %>%
+  mutate(function_label = factor(function_label, levels = rev(function_order)))
+```
+
+```{r specificity-heatmap}
+#| fig-width: 12
+#| fig-height: 9
+
+specificity_heatmap_data <- pair_function_specificity %>%
+  filter(function_id %in% unique(heatmap_data$function_id)) %>%
+  mutate(function_label = factor(function_label, levels = rev(function_order)))
+
+ggplot(specificity_heatmap_data, aes(x = spatial_pair, y = function_label, fill = specificity_score)) +
+  geom_tile(colour = "#fcfcfb", linewidth = 2) +
+  geom_text(aes(label = paste0(scales::percent(specificity_score, accuracy = 1), " (", n_genes, ")"),
+                colour = specificity_score > 0.6), size = 3, show.legend = FALSE) +
+  scale_fill_gradientn(colours = c("#cde2fb", "#6da7ec", "#2a78d6", "#0d366b"),
+                        limits = c(0, 1), name = "Share of\nevidence") +
+  scale_colour_manual(values = c(`TRUE` = "#fcfcfb", `FALSE` = "#0b0b0b")) +
+  scale_x_discrete(position = "top", limits = spatial_pair_order) +
+  scale_y_discrete(labels = scales::label_wrap(45)) +   # wrap long term names
+  labs(x = NULL, y = NULL, title = "Evidence specificity by spatial pair") +
+  theme_minimal(base_size = 12) +
+  theme(
+    panel.grid  = element_blank(),
+    axis.text.x = element_text(face = "bold", angle = 30, hjust = 0, vjust = 0),
+    axis.text.y = element_text(size = 8),
+    plot.title  = element_text(margin = margin(b = 10)),
+    plot.background  = element_rect(fill = "#fcfcfb", colour = NA),
+    panel.background = element_rect(fill = "#fcfcfb", colour = NA)
+  )
+```
+
+## Notes on interpretation
+
+- `specificity_score` describes how the evidence for a function is distributed across pairs; it is not a significance test. With 2–3 genes per cell, one gene changes it a lot, so read it together with `n_genes`.
+- A function shared by 2+ pairs means their genes implicate the same broader biology, not that the LR pairs interact with each other.
+- KEGG membership (curated, no test) and STRING GO enrichment (over-representation test on the whole gene set) are different kinds of evidence; a function supported by both is stronger. Genes with weak enrichment signal can be missing from the STRING side.
+- "(+N more)" rows are merged terms: see `kegg_signature_groups`, `string_signature_groups` and `string_id_to_group` for what was merged.
+- The heatmap is a display filter only; `function_convergence` and `pair_function_specificity` contain every function.

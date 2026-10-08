@@ -1,0 +1,509 @@
+---
+title: "STARmap PLUS: Control-Only Spatial Object (8 vs 13 Months)"
+subtitle: "Seurat object (counts, metadata, coordinates) for the 4 control sections, plus a hippocampus-only subset"
+date: today
+format:
+  html:
+    theme: flatly
+    toc: true
+    toc-depth: 3
+    toc-location: left
+    toc-expand: true
+    number-sections: true
+    code-fold: true
+    code-summary: "Show code"
+    code-tools: true
+    code-overflow: wrap
+    code-line-numbers: false
+    df-print: paged
+    fig-align: center
+    fig-width: 9
+    fig-height: 6
+    anchor-sections: true
+    smooth-scroll: true
+    embed-resources: true
+grid:
+  body-width: 1100px
+execute:
+  warning: false
+  message: false
+  echo: true
+---
+
+## Overview
+
+STARmap PLUS (Zeng et al., Nat Neurosci 2023; SCP1375), control mice only: 8 and 13 months, 2 sections each (35,771 cells).
+
+1. Plot the 4 sections coloured by cell type.
+2. Build a Seurat object from `expression_matrix_raw.csv`, `metadata.csv` and the per-section coordinate files.
+3. Subset to the hippocampus and save both objects.
+
+```{r setup}
+library(dplyr)
+library(purrr)
+library(tibble)
+library(ggplot2)
+library(patchwork)
+library(Matrix)
+library(Seurat)
+
+data_dir <- "STARmap_PLUS_data"
+
+out_dir <- file.path("output", "07_STARmapPLUS_ControlSpatialObject")
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+```
+
+## Spatial plot
+
+### Load the 4 control coordinate files
+
+```{r load-spatial}
+
+spatial_files <- c(
+  "8months-control-replicate_1"  = file.path(data_dir, "spatial_8months-control-replicate_1.csv"),
+  "8months-control-replicate_2"  = file.path(data_dir, "spatial_8months-control-replicate_2.csv"),
+  "13months-control-replicate_1" = file.path(data_dir, "spatial_13months-control-replicate_1.csv"),
+  "13months-control-replicate_2" = file.path(data_dir, "spatial_13months-control-replicate_2.csv")
+)
+
+panel_order <- names(spatial_files)
+
+read_scp_cluster_file <- function(path) {
+  out <- read.csv(path, skip = 2, header = FALSE,
+                   col.names = c("NAME", "X", "Y", "X_scaled", "Y_scaled",
+                                 "label", "top_level_cell_type", "sub_level_cell_type"),
+                   colClasses = c("character", "numeric", "numeric", "numeric", "numeric",
+                                  "character", "character", "character"))
+  stopifnot(is.numeric(out$X), is.numeric(out$Y)) 
+  out
+}
+
+spatial_all <- map_dfr(spatial_files, read_scp_cluster_file) |>
+  mutate(label = factor(label, levels = panel_order))
+
+spatial_all
+```
+
+### Cell-type palette
+
+```{r palette}
+
+cell_type_palette <- c(
+  "Astro"  = "#1f77b4",
+  "CA1"    = "#ff7f0e",
+  "CA2"    = "#2ca02c",
+  "CA3"    = "#d62728",
+  "CTX-Ex" = "#9467bd",
+  "DG"     = "#8c564b",
+  "Endo"   = "#e377c2",
+  "Inh"    = "#7f7f7f",
+  "LHb"    = "#bcbd22",
+  "Micro"  = "#17becf",
+  "OPC"    = "#aec7e8",
+  "Oligo"  = "#ffbb78",
+  "SMC"    = "#98df8a"
+)
+
+spatial_all <- spatial_all |>
+  mutate(top_level_cell_type = factor(top_level_cell_type, levels = names(cell_type_palette)))
+```
+
+### Plot
+
+One panel per section, y axis flipped (image coordinates). Built as 4 separate plots combined with `patchwork`, because `facet_wrap(scales = "free")` can't be combined with `coord_fixed()`.
+
+```{r spatial-plot}
+#| fig-width: 11
+#| fig-height: 10
+
+panel_titles <- spatial_all |>
+  count(label, name = "n_cells", .drop = FALSE) |>
+  mutate(panel_title = sprintf("%s  (n=%s cells)", label, format(n_cells, big.mark = ","))) |>
+  select(label, panel_title) |>
+  deframe()
+
+plot_one_sample <- function(lbl) {
+  sub <- spatial_all |> filter(label == lbl)
+  ggplot(sub, aes(x = X, y = Y, color = top_level_cell_type)) +
+    geom_point(size = 1.1, alpha = 0.9, stroke = 0) +
+    scale_color_manual(values = cell_type_palette, name = "Cell type", drop = FALSE) +
+    scale_y_reverse() +
+    coord_fixed() +
+    guides(color = guide_legend(override.aes = list(size = 3, alpha = 1))) +
+    labs(title = panel_titles[[as.character(lbl)]]) +
+    theme_void(base_size = 12) +
+    theme(plot.title = element_text(hjust = 0.5, size = 10, face = "bold"))
+}
+
+panel_plots <- map(panel_order, plot_one_sample)
+
+wrap_plots(panel_plots, ncol = 2) +
+  plot_layout(guides = "collect") +
+  plot_annotation(
+    title = "STARmap PLUS -- control mice, spatial coordinates by cell type",
+    theme = theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 14))
+  )
+```
+
+## Check the expression matrix before loading it
+
+
+```{r inspect-matrix-raw-lines}
+
+matrix_path <- file.path(data_dir, "expression_matrix_raw.csv")
+
+raw_lines <- readLines(matrix_path, n = 2)
+cat("Line 1, first 300 characters:\n")
+cat(substr(raw_lines[1], 1, 300), "\n\n")
+cat("Line 2, first 300 characters:\n")
+cat(substr(raw_lines[2], 1, 300), "\n")
+```
+
+The matrix is genes x cells: first column `GENE`, then one column per cell named by an integer cell ID. 
+
+```{r inspect-matrix-peek}
+matrix_peek <- read.csv(matrix_path, header = TRUE, nrows = 5, check.names = FALSE)
+n_cols <- ncol(matrix_peek)
+
+cat("Number of columns:", n_cols, "\n")
+cat("First column name (gene-ID column):", names(matrix_peek)[1], "\n")
+cat("First 10 cell-ID column names:\n")
+print(head(names(matrix_peek)[-1], 10))
+cat("\nFirst 5 gene names (first data column, first 5 rows):\n")
+print(matrix_peek[[1]])
+```
+
+```{r inspect-matrix-id-match}
+
+# first data row is SCP's "TYPE" row -> drop it
+metadata_all <- read.csv(file.path(data_dir, "metadata.csv"))
+metadata_all <- metadata_all[metadata_all$NAME != "TYPE", ]
+metadata_all$NAME <- as.integer(metadata_all$NAME)
+metadata_all$orig_index <- as.integer(metadata_all$orig_index)
+
+n_cells_total   <- nrow(metadata_all)
+n_cells_control <- metadata_all |> filter(label %in% panel_order) |> nrow()
+cat("Total cells in metadata.csv:", n_cells_total, "\n")
+cat("Cells in the 4 control samples:", n_cells_control, "(expected 35,771)\n\n")
+
+# which metadata column do the matrix column names correspond to?
+matrix_col_ids <- names(matrix_peek)[-1]
+
+name_hits     <- sum(matrix_col_ids %in% as.character(metadata_all$NAME))
+composite_ids <- paste0(metadata_all$label, "_", metadata_all$NAME)
+composite_hits <- sum(matrix_col_ids %in% composite_ids)
+origidx_hits  <- sum(matrix_col_ids %in% as.character(metadata_all$orig_index))
+
+cat("Of", length(matrix_col_ids), "column IDs in the matrix header:\n")
+cat(" - matched metadata$NAME directly:", name_hits, "\n")
+cat(" - matched metadata's label_NAME composite:", composite_hits, "\n")
+cat(" - matched metadata$orig_index:", origidx_hits, "\n")
+cat("\nWhichever count is highest (ideally close to", length(matrix_col_ids), ") is the field to key on below.\n")
+```
+
+Matrix column headers match metadata's `NAME` column (unique across all sections); `orig_index` restarts in each section and must not be used as a key. Columns are selected by position, which is only valid if the matrix columns are in the same order as the metadata rows -- checked here, and the render stops if they aren't.
+
+```{r inspect-matrix-position-check}
+
+matrix_ids_all <- names(matrix_peek)[-1]
+
+same_length <- length(matrix_ids_all) == nrow(metadata_all)
+same_order  <- if (same_length) identical(matrix_ids_all, as.character(metadata_all$NAME)) else FALSE
+
+cat("Data columns in expression_matrix_raw.csv:", length(matrix_ids_all), "\n")
+cat("Rows in metadata.csv:", nrow(metadata_all), "\n")
+cat("Same length:", same_length, "\n")
+cat("Column order matches metadata_all$NAME row-for-row:", same_order, "\n")
+
+# columns are selected by position below -> must match metadata row order
+stopifnot(same_order)
+```
+
+## Build the control-subset count matrix
+
+```{r build-count-matrix}
+# metadata rows of the 4 control sections; the same positions index the matrix columns (+1 for GENE)
+control_row_positions <- which(metadata_all$label %in% panel_order)
+
+# new unique cell IDs; remove_rownames() so column_to_rownames() works later
+control_meta <- metadata_all[control_row_positions, ] |>
+  tibble::remove_rownames() |>
+  mutate(cell_id = paste0("Cell_", dplyr::row_number()))
+
+stopifnot(nrow(control_meta) == 35771)          # sanity check against the known control cell count
+stopifnot(!anyDuplicated(control_meta$cell_id))  # must be unique by construction
+
+expr_df <- read.csv(matrix_path, header = TRUE, check.names = FALSE)
+gene_names <- expr_df[[1]]
+
+expr_mat <- as.matrix(expr_df[, control_row_positions + 1])
+rownames(expr_mat) <- gene_names
+colnames(expr_mat) <- control_meta$cell_id
+
+counts_sparse <- Matrix::Matrix(expr_mat, sparse = TRUE)
+rm(expr_df, expr_mat); gc()
+
+saveRDS(counts_sparse, file.path(out_dir, "starmap_plus_control_counts.rds"))
+
+cat("Built control-subset count matrix:", nrow(counts_sparse), "genes x", ncol(counts_sparse), "cells\n")
+
+```
+
+## Assemble the Seurat object
+
+Coordinates are stored as a 2-D `spatial` reduction (no Visium-style image slot), so `DimPlot(obj, reduction = "spatial")` works.
+
+```{r build-seurat}
+
+meta_for_seurat <- control_meta |>
+  column_to_rownames("cell_id")
+
+starmap_obj <- CreateSeuratObject(
+  counts    = counts_sparse,
+  meta.data = meta_for_seurat,
+  project   = "STARmapPLUS_control"
+)
+
+# coordinate files only have NAME -> map to cell_id via the (label, NAME) key
+name_to_cell_id <- control_meta |>
+  transmute(join_key = paste(as.character(label), NAME, sep = "___"), cell_id)
+
+coords_for_seurat <- spatial_all |>
+  mutate(join_key = paste(as.character(label), NAME, sep = "___")) |>
+  left_join(name_to_cell_id, by = "join_key") |>
+  filter(!is.na(cell_id), cell_id %in% colnames(starmap_obj)) |>
+  distinct(cell_id, .keep_all = TRUE) |>
+  arrange(match(cell_id, colnames(starmap_obj))) |>
+  select(cell_id, X, Y)
+
+cat("coords_for_seurat rows:", nrow(coords_for_seurat), " | ncol(starmap_obj):", ncol(starmap_obj), "\n")
+
+cat("\ncontrol_meta rows per label:\n")
+print(table(control_meta$label))
+cat("\nspatial_all rows per label:\n")
+print(table(spatial_all$label))
+
+missing_cell_ids <- setdiff(colnames(starmap_obj), coords_for_seurat$cell_id)
+cat("\nCells in starmap_obj with NO matched spatial coordinate:", length(missing_cell_ids), "\n")
+if (length(missing_cell_ids) > 0) {
+  missing_preview <- control_meta[control_meta$cell_id %in% head(missing_cell_ids, 10),
+                                   c("cell_id", "label", "NAME")]
+  cat("A sample of unmatched cells (check these NAME/label values against spatial_all by eye):\n")
+  print(missing_preview)
+}
+
+stopifnot(nrow(coords_for_seurat) == ncol(starmap_obj))
+
+spatial_emb <- as.matrix(coords_for_seurat |> select(X, Y))
+rownames(spatial_emb) <- coords_for_seurat$cell_id
+colnames(spatial_emb) <- c("spatial_1", "spatial_2")
+
+starmap_obj[["spatial"]] <- CreateDimReducObject(
+  embeddings = spatial_emb,
+  key = "spatial_",
+  assay = DefaultAssay(starmap_obj)
+)
+
+saveRDS(starmap_obj, file.path(out_dir, "starmap_plus_control_seurat.rds"))
+
+starmap_obj
+
+```
+
+## Verify: re-plot from the Seurat object
+
+Same plot as above, rebuilt only from `starmap_obj`. If counts, metadata and coordinates are aligned, it looks identical.
+
+```{r verify-seurat-plot}
+#| fig-width: 11
+#| fig-height: 10
+
+verify_coords <- as.data.frame(Embeddings(starmap_obj, "spatial"))
+verify_coords$cell_id <- rownames(verify_coords)
+
+verify_meta <- starmap_obj@meta.data
+verify_meta$cell_id <- rownames(verify_meta)
+
+verify_df <- verify_coords |>
+  left_join(verify_meta |> select(cell_id, label, top_level_cell_type), by = "cell_id") |>
+  mutate(
+    label = factor(label, levels = panel_order),
+    top_level_cell_type = factor(top_level_cell_type, levels = names(cell_type_palette))
+  )
+
+stopifnot(nrow(verify_df) == ncol(starmap_obj))  # every cell got a coordinate + cell type back
+
+verify_panel_titles <- verify_df |>
+  count(label, name = "n_cells", .drop = FALSE) |>
+  mutate(panel_title = sprintf("%s  (n=%s cells)", label, format(n_cells, big.mark = ","))) |>
+  select(label, panel_title) |>
+  deframe()
+
+plot_one_sample_verify <- function(lbl) {
+  sub <- verify_df |> filter(label == lbl)
+  ggplot(sub, aes(x = spatial_1, y = spatial_2, color = top_level_cell_type)) +
+    geom_point(size = 1.1, alpha = 0.9, stroke = 0) +
+    scale_color_manual(values = cell_type_palette, name = "Cell type", drop = FALSE) +
+    scale_y_reverse() +
+    coord_fixed() +
+    guides(color = guide_legend(override.aes = list(size = 3, alpha = 1))) +
+    labs(title = verify_panel_titles[[as.character(lbl)]]) +
+    theme_void(base_size = 12) +
+    theme(plot.title = element_text(hjust = 0.5, size = 10, face = "bold"))
+}
+
+verify_plots <- map(panel_order, plot_one_sample_verify)
+
+wrap_plots(verify_plots, ncol = 2) +
+  plot_layout(guides = "collect") +
+  plot_annotation(
+    title = "Verification -- same plot, rebuilt entirely from starmap_obj",
+    theme = theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 14))
+  )
+
+```
+
+## Restrict to hippocampus
+
+`metadata.csv`'s `region` column is used directly.
+
+```{r region-breakdown}
+
+cat("Cells per region (all 4 samples combined):\n")
+print(table(starmap_obj$region))
+cat("\nCells per region_merged:\n")
+print(table(starmap_obj$region_merged))
+cat("\nCells per region x sample:\n")
+print(table(starmap_obj$region, starmap_obj$label))
+```
+
+Subset to `region == "Hippocampus"`; the full object is saved separately.
+
+```{r subset-hippocampus}
+
+starmap_hpc <- subset(starmap_obj, subset = region == "Hippocampus")
+
+cat("Hippocampus-only:", ncol(starmap_hpc), "cells (from", ncol(starmap_obj), "total)\n")
+cat("\nPer-sample counts, hippocampus only:\n")
+print(table(starmap_hpc$label))
+
+saveRDS(starmap_hpc, file.path(out_dir, "starmap_plus_control_seurat_hippocampus.rds"))
+```
+
+```{r hippocampus-plot}
+#| fig-width: 11
+#| fig-height: 10
+
+hpc_coords <- as.data.frame(Embeddings(starmap_hpc, "spatial"))
+hpc_coords$cell_id <- rownames(hpc_coords)
+
+hpc_meta <- starmap_hpc@meta.data
+hpc_meta$cell_id <- rownames(hpc_meta)
+
+hpc_df <- hpc_coords |>
+  left_join(hpc_meta |> select(cell_id, label, top_level_cell_type), by = "cell_id") |>
+  mutate(
+    label = factor(label, levels = panel_order),
+    top_level_cell_type = factor(top_level_cell_type, levels = names(cell_type_palette))
+  )
+
+hpc_panel_titles <- hpc_df |>
+  count(label, name = "n_cells", .drop = FALSE) |>
+  mutate(panel_title = sprintf("%s  (n=%s cells)", label, format(n_cells, big.mark = ","))) |>
+  select(label, panel_title) |>
+  deframe()
+
+plot_one_sample_hpc <- function(lbl) {
+  sub <- hpc_df |> filter(label == lbl)
+  ggplot(sub, aes(x = spatial_1, y = spatial_2, color = top_level_cell_type)) +
+    geom_point(size = 1.1, alpha = 0.9, stroke = 0) +
+    scale_color_manual(values = cell_type_palette, name = "Cell type", drop = FALSE) +
+    scale_y_reverse() +
+    coord_fixed() +
+    guides(color = guide_legend(override.aes = list(size = 3, alpha = 1))) +
+    labs(title = hpc_panel_titles[[as.character(lbl)]]) +
+    theme_void(base_size = 12) +
+    theme(plot.title = element_text(hjust = 0.5, size = 10, face = "bold"))
+}
+
+hpc_plots <- map(panel_order, plot_one_sample_hpc)
+
+wrap_plots(hpc_plots, ncol = 2) +
+  plot_layout(guides = "collect") +
+  plot_annotation(
+    title = "STARmap PLUS -- hippocampus only, control mice",
+    theme = theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 14))
+  )
+
+```
+
+## Highlight selected cell types
+
+```{r highlight-celltype}
+#| fig-width: 11
+#| fig-height: 10
+
+highlight_types <- c("Micro", "OPC", "Astro", "Endo") 
+
+stopifnot(all(highlight_types %in% names(cell_type_palette)))
+
+hl_coords <- as.data.frame(Embeddings(starmap_hpc, "spatial"))
+hl_coords$cell_id <- rownames(hl_coords)
+
+hl_meta <- starmap_hpc@meta.data
+hl_meta$cell_id <- rownames(hl_meta)
+
+hl_df <- hl_coords |>
+  left_join(hl_meta |> select(cell_id, label, top_level_cell_type), by = "cell_id") |>
+  mutate(label = factor(label, levels = panel_order))
+
+hl_panel_titles <- hl_df |>
+  count(label, name = "n_cells", .drop = FALSE) |>
+  mutate(panel_title = sprintf("%s  (n=%s cells)", label, format(n_cells, big.mark = ","))) |>
+  select(label, panel_title) |>
+  deframe()
+
+plot_one_sample_highlight <- function(lbl) {
+  sub        <- hl_df |> filter(label == lbl)
+  background <- sub |> filter(!top_level_cell_type %in% highlight_types)
+  foreground <- sub |>
+    filter(top_level_cell_type %in% highlight_types) |>
+    mutate(top_level_cell_type = factor(top_level_cell_type, levels = highlight_types))
+
+  per_type_n <- foreground |> count(top_level_cell_type, name = "n", .drop = FALSE)
+  subtitle_txt <- paste(sprintf("%s: n=%s", per_type_n$top_level_cell_type, format(per_type_n$n, big.mark = ",")),
+                         collapse = "   ")
+
+  ggplot() +
+    geom_point(data = background, aes(x = spatial_1, y = spatial_2),
+               color = "grey85", size = 1.1, alpha = 0.6, stroke = 0) +
+    geom_point(data = foreground, aes(x = spatial_1, y = spatial_2, color = top_level_cell_type),
+               size = 1.3, alpha = 0.95, stroke = 0) +
+    scale_color_manual(values = cell_type_palette[highlight_types], name = "Cell type", drop = FALSE) +
+    scale_y_reverse() +
+    coord_fixed() +
+    guides(color = guide_legend(override.aes = list(size = 3, alpha = 1))) +
+    labs(title = hl_panel_titles[[as.character(lbl)]], subtitle = subtitle_txt) +
+    theme_void(base_size = 12) +
+    theme(
+      plot.title = element_text(hjust = 0.5, size = 10, face = "bold"),
+      plot.subtitle = element_text(hjust = 0.5, size = 8)
+    )
+}
+
+highlight_plots <- map(panel_order, plot_one_sample_highlight)
+
+wrap_plots(highlight_plots, ncol = 2) +
+  plot_layout(guides = "collect") +
+  plot_annotation(
+    title = paste("STARmap PLUS, hippocampus only -- highlighting", paste(highlight_types, collapse = ", ")),
+    theme = theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 14))
+  )
+
+```
+
+## Notes
+
+- Cell IDs are new sequential `Cell_1 … Cell_n`; original `NAME`, `orig_index` and `label` are kept as metadata.
+- `starmap_hpc` contains `region == "Hippocampus"` only.
+- Saved: `starmap_plus_control_seurat.rds` (all regions) and `starmap_plus_control_seurat_hippocampus.rds`.

@@ -1,14 +1,33 @@
 ---
 title: "Visium QC and Hippocampus Region Selection"
 subtitle: "Samples: Y, M, O_1, O_2 (4 slides each = 16 total)"
+date: today
 format:
   html:
+    theme: flatly
     toc: true
-    code-fold: false
+    toc-depth: 3
+    toc-location: left
+    toc-expand: true
+    number-sections: true
+    code-fold: true
+    code-summary: "Show code"
+    code-tools: true
+    code-overflow: wrap
+    code-line-numbers: false
+    df-print: paged
+    fig-align: center
+    fig-width: 9
+    fig-height: 6
+    anchor-sections: true
+    smooth-scroll: true
     embed-resources: true
+grid:
+  body-width: 1100px
 execute:
   warning: false
   message: false
+  echo: true
 ---
 
 ## Setup
@@ -25,7 +44,6 @@ library(tibble)
 ```
 
 ```{r paths}
-# ---- EDIT THESE PATHS ----
 sample_dirs <- c(
   Y   = "/home/vkorob/Documents/data_scripts/visium/Visium_SJ_3ages/Y",
   M   = "/home/vkorob/Documents/data_scripts/visium/Visium_SJ_3ages/M",
@@ -35,8 +53,8 @@ sample_dirs <- c(
 
 age_lookup <- c(Y = "young", M = "middle", O_1 = "old", O_2 = "old")
 
-out_dir <- "visium_processed"
-dir.create(out_dir, showWarnings = FALSE)
+out_dir <- file.path("output", "01_processing_subset_to_HPC")
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
 # find the slide subfolders inside each age/replicate directory
 slide_df <- imap_dfr(sample_dirs, function(dir_path, group_name) {
@@ -56,7 +74,7 @@ age_lookup_full <- setNames(slide_df$age, slide_df$sample)
 slide_df
 ```
 
-## Step 1: Load each slide and compute QC metrics
+## Load each slide and compute QC metrics
 
 ```{r load-and-qc}
 load_and_qc <- function(sample_dir, sample_name) {
@@ -75,7 +93,7 @@ load_and_qc <- function(sample_dir, sample_name) {
 seurat_list <- imap(spatial_dirs, load_and_qc)
 ```
 
-## Step 2: Visualize QC metrics per sample (before filtering)
+## Visualize QC metrics per sample (before filtering)
 
 ```{r qc-plots-before, fig.width=12, fig.height=5}
 for (sample_name in names(seurat_list)) {
@@ -89,10 +107,9 @@ for (sample_name in names(seurat_list)) {
 }
 ```
 
-## Step 3: Apply QC thresholds
+## Apply QC thresholds
 
 ```{r qc-filter, eval=FALSE}
-# ---- EDIT: set thresholds appropriate for your tissue/depth ----
 min_counts  <- 500
 min_features <- 200
 max_mt_pct  <- 20
@@ -123,30 +140,27 @@ qc_summary
 write_csv(qc_summary, file.path(out_dir, "qc_summary.csv"))
 ```
 
-## Step 4: Manual hippocampus selection (via Loupe Browser)
+## Manual hippocampus selection (via Loupe Browser)
 
 **Before running this chunk:**
 
-1. Open each slide in **10x Loupe Browser** (`.cloupe` file, or the raw output folder).
-2. Use the lasso/polygon selection tool to manually outline the hippocampus on the H&E image.
-3. Export the selected barcodes: *Selections panel → Export Barcodes as CSV*.
-4. Save each file into the `loupe_barcodes/` folder, named `<sample>_hippocampus_barcodes.csv`
-   (e.g. `Y_A1_hippocampus_barcodes.csv`), with a single column of barcodes.
+I manually selected spots belonging to HPC region
 
 ```{r manual-region-selection, warning=FALSE}
 subset_to_hippocampus <- function(sample_name, sp_obj, barcode_dir) {
 
   barcode_file1 <- file.path(barcode_dir, "HPC_coords_1.csv")
 
-  if (!file.exists(barcode_file)) {
+  if (!file.exists(barcode_file1)) {
     warning("No barcode file found for ", sample_name, " - skipping region subset")
     return(sp_obj)
   }
 
   keep_barcodes <- read_csv(barcode_file1, show_col_types = FALSE)[[1]]
   
-  if("HPC_coords_2.csv" %in% list.files(barcode_dir)) {
-    barcode_file2 <- file.path(barcode_dir, "HPC_coords_1.csv")
+  # some slides have the 2 hemispheres, add second
+  barcode_file2 <- file.path(barcode_dir, "HPC_coords_2.csv")
+  if (file.exists(barcode_file2)) {
     keep_barcodes2 = read_csv(barcode_file2, show_col_types = FALSE)[[1]]
     
     keep_barcodes = c(keep_barcodes, keep_barcodes2)
@@ -168,7 +182,7 @@ for (sample_name in names(seurat_list)) {
 }
 ```
 
-## Step 5: Confirm the crop looks right
+## Confirm the crop looks right
 
 ```{r qc-plots-region, fig.width=6, fig.height=6}
 for (sample_name in names(seurat_list)) {
@@ -177,7 +191,7 @@ for (sample_name in names(seurat_list)) {
 }
 ```
 
-## Step 6: Save processed objects
+## Save processed objects
 
 ```{r save-outputs}
 for (sample_name in names(seurat_list)) {

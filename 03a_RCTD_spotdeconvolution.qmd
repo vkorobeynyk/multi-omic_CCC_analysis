@@ -1,14 +1,33 @@
 ---
-title: "Region-Restricted RCTD: DG and ML"
+title: "03a — Region-Restricted RCTD: DG and ML"
 subtitle: "Uses merged_hippocampus_clustered.rds with region labels (DG, ML, CA1_2, CA3)"
+date: today
 format:
   html:
+    theme: flatly
     toc: true
-    code-fold: false
+    toc-depth: 3
+    toc-location: left
+    toc-expand: true
+    number-sections: true
+    code-fold: true
+    code-summary: "Show code"
+    code-tools: true
+    code-overflow: wrap
+    code-line-numbers: false
+    df-print: paged
+    fig-align: center
+    fig-width: 9
+    fig-height: 6
+    anchor-sections: true
+    smooth-scroll: true
     embed-resources: true
+grid:
+  body-width: 1100px
 execute:
   warning: false
   message: false
+  echo: true
 ---
 
 ## Setup
@@ -34,16 +53,15 @@ source("helper_functions.R")
 ```
 
 ```{r paths}
-merged_path <- "visium_clustered/merged_hippocampus_clustered.rds"
+merged_path <- file.path("output", "02_Integration_clustering", "merged_hippocampus_clustered.rds")
 ref_path    <- "/home/vkorob/Documents/data_scripts/RNA_seq/10x_scRNAseq_jessberger/Final_Annotation.rds"
 
+out_dir   <- file.path("output", "03_RCTD_SpotDeconvolution")
 
-out_dir <- "rctd_by_region"
-
-dir.create(out_dir, showWarnings = FALSE)
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
 max_cores <- 2
-eval_RCTD = TRUE   # TRUE = run RCTD and save results; FALSE = load the saved results below
+eval_RCTD = FALSE   # TRUE = run RCTD and save results; FALSE = load the saved results below
 
 if (!eval_RCTD) {
   weights_all  <- read.csv(file.path(out_dir, "rctd_weights_GC_ML.csv"))
@@ -61,11 +79,11 @@ table(merged_obj$region)
 table(merged_obj$sample)
 ```
 
-## Build the full scRNA-seq reference (counts + labels, used to build region-specific subsets)
+## Build the full scRNA-seq reference
 ```{r build-full-reference, eval=eval_RCTD}
 ref_counts <- GetAssayData(ref_seurat, assay = "RNA", layer = "counts")
 
-# Create a new merged column, keeping the original intact
+# Create a new merged column
 ref_seurat$Celltype_updated <- ref_seurat$Celltype %>%
   gsub("qNSC|nIPC|Neuroblast","Neurogenic_lineage",. ) %>%
   gsub("SMC|Pericyte|Endothelial","Vascular",. )
@@ -80,7 +98,6 @@ table(cell_types)
 ## Define which cell types are candidates in each region
 
 ```{r region-celltypes}
-# ---- EDIT if you want to adjust the candidate cell types per region ----
 region_celltypes <- list(
   DG = c("GC", "Neurogenic_lineage", "Astrocyte", "Microglia", "Vascular", "OPC"),
   ML = c("Astrocyte", "Microglia", "Vascular", "OPC", "Cajal-Retzius")
@@ -100,7 +117,7 @@ region_references <- map(region_celltypes, build_region_reference,
 
 `run_rctd_region()` (in helper_functions.R) runs RCTD on one sample x region subset.
 
-```{r run-all, eval=eval_RCTD}
+```{r run-all, eval=eval_RCTD, results="hide"}
 sample_names <- unique(merged_obj$sample)
 regions_to_run <- names(region_celltypes)   # "DG", "ML"
 
@@ -157,7 +174,6 @@ head(weights_all)
 ## Save the RCTD result objects
 
 ```{r save-rctd-objects, eval=eval_RCTD}
-# save entire object
 saveRDS(rctd_results, file.path(out_dir, "rctd_results_GC_ML.rds"))
 
 # save each individual object for lianaPlus moran's I — export_rctd_slice() in
@@ -271,14 +287,14 @@ for (ct in intersect(names(validation_markers), celltype_cols)) {
 ## Negative control markers
 ```{r neg_control, warning=FALSE}
 negative_control_markers <- c(
-  Astrocyte = "Prox1",   # GC marker - shouldn't track astrocyte proportion
+  Astrocyte = "Prox1", 
   Microglia = "Prox1",
-  GC        = "Gfap",    # Astrocyte marker - shouldn't track GC proportion
+  GC        = "Gfap", 
   Vascular  = "Gfap",
-  OPC       = "Aif1"     # microglia marker as mismatch for OPC
+  OPC       = "Aif1" 
 )
 
-housekeeping_gene <- "Actb"  # expressed broadly - not expected to track any single cell type specifically
+housekeeping_gene <- "Actb"  # expressed broadly - not expected in any single cell type specifically
 
 all_genes <- unique(c(validation_markers, negative_control_markers, housekeeping_gene))
 all_genes <- intersect(all_genes, rownames(merged_obj))
@@ -350,10 +366,10 @@ for (ct in names(validation_markers)) {
 Cajal-Retzius cells are rare in the adult brain, so any single marker gene can be too sparsely
 detected in a Visium spot to give a reliable read on its own -- `Trp73` in particular is only
 detected in a handful of ML spots when checked individually. Rather than validate the RCTD
-`Cajal-Retzius` weight against one marker at a time, this combines several canonical CR markers
-into a single composite score, which should be more robust to any one gene's sparsity/noise.
+`Cajal-Retzius` weight against one marker at a time, we combine several canonical CR markers
+into a single score, which should be more robust.
 
-`Seurat::AddModuleScore()` is used here rather than a plain average of the marker genes: it bins
+`Seurat::AddModuleScore()` is used here: it bins
 all genes by their background expression level and subtracts a matched control-gene-set score per
 spot, which keeps a comparatively highly-expressed marker (e.g. `Reln`) from dominating the score
 and corrects for spot-to-spot differences in overall depth/complexity -- useful here since the
@@ -361,7 +377,6 @@ panel mixes a very sparsely-detected gene (`Trp73`) with more commonly detected 
 `Ndnf`, `Cxcl12`).
 
 ```{r cr-marker-score, warning=FALSE}
-# ---- EDIT: adjust this list if you want to add/drop candidate CR markers ----
 cr_markers <- c("Reln", "Trp73", "Lhx1", "Ndnf", "Cxcl12")
 
 cr_markers_present <- intersect(cr_markers, rownames(merged_obj))
@@ -393,8 +408,7 @@ cat("ML spots with a Cajal-Retzius weight:", nrow(ml_cr_df), "\n")
 ### Individual markers, for comparison
 
 The same Spearman check as the "Positive control markers" section above, run per CR marker
-individually, so the combined score's performance can be judged against each gene on its own
-rather than in isolation.
+individually, so the combined score's performance can be judged against each gene on its own.
 
 ```{r cr-marker-score-individual, warning=FALSE}
 individual_cr_cor <- purrr::map_dfr(cr_markers_present, function(g) {
@@ -408,6 +422,8 @@ individual_cr_cor
 ```
 
 ### Combined score vs. RCTD weight
+
+**We obtain negative correlation, so most likely the CR cells signal is not real**
 
 ```{r cr-marker-score-cor, warning=FALSE}
 cr_score_cor <- spearman_cor(ml_cr_df$`Cajal-Retzius`, ml_cr_df$CR_score)
@@ -496,9 +512,7 @@ ggplot(full_ct_marker_cor, aes(x = marker, y = cell_type, fill = rho)) +
 
 # Check correlation between every celltype using weight permutation approach
 
-RCTD weights sum to 1 per spot, so raw correlations between cell type proportions are biased: an increase in one weight mechanically forces a decrease elsewhere, independent of true biology. We correct for this with a centered log-ratio (CLR) transform, which re-expresses each cell type's weight relative to that spot's own geometric-mean weight rather than a fixed total, making standard correlation valid. Because CLR transforms of a fixed composition still carry a residual, structural correlation bias even under true independence, we build an empirical null: for each cell type, weights are shuffled across spots independently (breaking real pairing while preserving that type's own distribution), and the CLR + correlation is recomputed, repeated 500 times. The z-score for each cell type pair is (observed correlation − mean of permuted correlations) / SD of permuted correlations — how many standard deviations the true colocalization signal sits above what pure chance and compositional structure alone would produce.
-
-`clr_transform()`, `permute_null_clr_cor()`, `analyze_coloc_for_region()` and `make_z_df()` live in helper_functions.R.
+RCTD weights sum to 1 per spot, so raw correlations between cell type proportions are biased: an increase in one weight forces a decrease elsewhere. We correct for this with a centered log-ratio (CLR) transform, which re-computes each cell type's weight relative to that spot's own geometric-mean weight rather than a fixed total, making standard correlation valid. Because CLR transforms of a fixed composition still carry a residual, structural correlation bias even under true independence, we build an empirical null: for each cell type, weights are shuffled across spots independently (breaking real pairing while preserving that type's own distribution), and the CLR + correlation is recomputed, repeated 500 times. The z-score for each cell type pair is (observed correlation − mean of permuted correlations) / SD of permuted correlations — how many standard deviations the true colocalization signal sits above what pure chance and compositional structure alone would produce.
 
 ```{r coloc-zscore, warning=FALSE}
 set.seed(1)
@@ -523,26 +537,23 @@ ggplot(z_all, aes(x = ct1, y = ct2, fill = z)) +
 
 # Check partial correlation accounting for other celltypes
 
-Two cell types can appear correlated not because they directly colocalize, but because both independently track a third factor — e.g. spots with less of a dominant type (Astrocyte, Vascular) leave more relative room for several minor types at once. Partial correlation isolates the direct relationship between two cell types by statistically removing the variance they each share with all other cell types in the composition, leaving only the association specific to that pair.
+Two cell types can appear correlated not because they directly colocalize, but because both independently correlate with a third factor. Partial correlation isolates the direct relationship between two cell types by statistically removing the variance they each share with all other cell types in the composition, leaving only the association specific to that pair.
 
 How the Calculation Works:
-The mechanics of partial correlation rely on linear regression and the analysis of unexplained variance (residuals):
+Partial correlation relies on linear regression and the analysis of unexplained variance (residuals):
 - Predict Variable X: You run a linear regression predicting your first main variable (X) using the control variable (Z), and find the leftover piece or residual (\(e_{x}\)).
 - Predict Variable Y: You run another linear regression predicting your second main variable (Y) using the same control variable (Z), and find its residual (\(e_{y}\)).
 - Correlate the Residuals: You compute the standard correlation between the two sets of residuals (\(e_{x}\) and \(e_{y}\)). This final value represents what is left of the relationship between X and Y after stripping away the shared impact of Z
 
-**computing correlation between OPC and CR celltypes:**
+**Example: computing correlation between OPC and CR celltypes:**
 resid_OPC <- resid(lm(OPC ~ Astrocyte + Microglia + Vascular, data = ml_df))
 resid_CR  <- resid(lm(`Cajal-Retzius` ~ Astrocyte + Microglia + Vascular, data = ml_df))
 
-cor(resid_OPC, resid_CR)   # should match pcor_ml$estimate["OPC", "Cajal-Retzius"]
+cor(resid_OPC, resid_CR) 
 
 `compute_pcor_region()` and `make_pcor_df()` live in helper_functions.R.
 
 ```{r partial-cor, warning=FALSE}
-# Microglia dropped in both regions — it's present in both candidate sets and wasn't
-# a focus here, so this preserves every pair we actually care about (OPC-CR, Astro-Vasc,
-# Astro-CR, etc.) in both DG and ML.
 pcor_DG <- compute_pcor_region(weights_all, "DG", region_celltypes)
 pcor_ML <- compute_pcor_region(weights_all, "ML", region_celltypes)
 
@@ -558,7 +569,6 @@ ggplot(pcor_all, aes(x = ct1, y = ct2, fill = estimate)) +
   facet_wrap(~region, scales = "free") +
   theme_minimal() +
   labs(title = "Cell type colocalization (partial correlation, controlling for other types), by region",
-       subtitle = "Microglia dropped per region to remove the CLR closure singularity",
        x = NULL, y = NULL) +
   theme(axis.text.x = element_text(angle = 45, hjust = 1))
 ```
@@ -593,7 +603,7 @@ lr_resource_mouse <- op_resource %>%
   rename(target_mouse = mouse) %>%
   # keep both original human symbols (for reference) and the mouse symbols to actually use downstream
   distinct(source_mouse, target_mouse, .keep_all = TRUE) %>%
-  filter(!grepl("_", source_mouse), !grepl("_", target_mouse))  # drop complexes, same as before
+  filter(!grepl("_", source_mouse), !grepl("_", target_mouse))  # drop complexes
 
 norm_expr <- GetAssayData(merged_obj, assay = "SCT", layer = "data")
 
@@ -614,9 +624,19 @@ age_vec_full  <- age_map_full[colnames(expr_sub)]
 
 # Ligand-receptor signaling vs cell-type colocalization
 
-For each pair of cell types below, we ask two related questions: (1) which ligand-receptor pairs' same-spot co-expression tracks how strongly that pair of cell types colocalizes (`coloc_strength` = product of their RCTD weights), after adjusting for sequencing depth (nUMI); and (2) does that relationship change across age (young / middle / old)?
+For each pair of cell types below, we ask two related questions:
 
-`run_lr_coloc_pipeline()` (helper_functions.R) does all of this in one call for a given `(ct1, ct2)` pair: it builds `coloc_strength`, restricts to spots where both cell types were valid RCTD candidates (this matters for OPC-Cajal-Retzius below, since Cajal-Retzius is only a candidate in the ML region), then runs the same-spot correlation, the coloc-tracking correlation, the age-interaction model, and the age-stratified detection-enrichment analysis. The plotting helpers below (`plot_top_lr_bar`, `plot_lr_volcano`, `plot_lr_vs_coloc_scatter`, `plot_quadrant_scatter`, `plot_metric_trajectory`) are shared across all three pairs.
+1. Which ligand-receptor pairs' same-spot co-expression tracks how strongly that pair of cell types colocalizes (`coloc_strength` = product of their RCTD weights), after adjusting for sequencing depth (nUMI)?
+2. Does that relationship change across age (young / middle / old)?
+
+`run_lr_coloc_pipeline()` (helper_functions.R) does all of this in one call for a given `(ct1, ct2)` pair: it builds `coloc_strength`, restricts to spots where both cell types have valid RCTD candidates (this matters for OPC-Cajal-Retzius below, since Cajal-Retzius is only a candidate in the ML region), then runs the:
+
+1. same-spot correlation
+2. the coloc-tracking correlation
+3. the age-interaction model
+4. the age-stratified detection-enrichment analysis. 
+
+The plotting helpers below (`plot_top_lr_bar`, `plot_lr_volcano`, `plot_lr_vs_coloc_scatter`, `plot_quadrant_scatter`, `plot_metric_trajectory`) are shared across all three pairs.
 
 ## Astrocyte - Vascular
 
@@ -859,11 +879,11 @@ overlap_av_vm$overlap_df %>%
 
 # Save data for LIANA+ CCC (scRNA-seq), all 4 cell-type pairs
 
-`04_runLiana_scRNAseq.ipynb` runs the (expensive) permutation-based CCC test only once per age, using the pooled candidate LR pairs from all 4 spatial pipelines below — then filters that single result into 4 per-pair CSVs (`liana_astro_vasc_by_age.csv`, `liana_vasc_microglia_by_age.csv`, `liana_opc_cr_by_age.csv`, `liana_neuro_gc_by_age.csv`). No need to rerun the permutation step separately per pair.
+`03b_runLiana_scRNAseq.ipynb` runs the permutation-based CCC test only once per age, using the pooled candidate LR pairs from all 4 spatial pipelines below — then filters that single result into 4 per-pair CSVs (`liana_astro_vasc_by_age.csv`, `liana_vasc_microglia_by_age.csv`, `liana_opc_cr_by_age.csv`, `liana_neuro_gc_by_age.csv`). No need to rerun the permutation step separately per pair.
 
 ```{r save-for-liana, warning=FALSE}
-export_dir <- "ref_export"
-dir.create(export_dir, showWarnings = FALSE)
+export_dir <- file.path(out_dir, "ref_export")   # read by 03b_runLiana_scRNAseq.ipynb
+dir.create(export_dir, recursive = TRUE, showWarnings = FALSE)
 
 counts <- GetAssayData(ref_seurat, assay = "RNA", layer = "data")
 Matrix::writeMM(as(counts, "sparseMatrix"), file.path(export_dir, "lognormalized_matrix.mtx"))
@@ -876,9 +896,6 @@ meta <- ref_seurat@meta.data %>%
 
 write.csv(meta, file.path(export_dir, "metadata.csv"), row.names = FALSE)
 
-# pool each pipeline's own significant candidate pairs into one combined resource —
-# liana-py only needs to run the permutation step once per age; afterward the
-# notebook filters that same result by source/target per cell-type pair
 combined_candidate_resource <- bind_rows(
   astro_vasc$candidate_pairs     %>% mutate(spatial_pair = astro_vasc$pair_label),
   vasc_microglia$candidate_pairs %>% mutate(spatial_pair = vasc_microglia$pair_label),
@@ -890,87 +907,19 @@ combined_candidate_resource <- bind_rows(
 write.csv(combined_candidate_resource %>% dplyr::select(-pair, -spatial_pair) %>%
             rename(ligand = source_genesymbol, receptor = target_genesymbol),   # liana-py's expected column names
           file.path(export_dir, "candidate_resource.csv"), row.names = FALSE)
-
-# kept for reference only — which spatial pipeline each candidate pair came from
-write.csv(combined_candidate_resource, file.path(export_dir, "candidate_resource_provenance.csv"), row.names = FALSE)
 ```
 
-# Compare each pair's spatial results to its LIANA+ CCC scRNA-seq results
+# Save the spatial LR-colocalization pipeline results (read by 03c)
 
-`compare_spatial_to_liana()` and `plot_cross_modality_trajectory()` (helper_functions.R) join a spatial pipeline result to its matching age-split LIANA+ CSV and check 3-way sign agreement (spatial slope, spatial detection enrichment, scRNA evidence) on the young-to-old shift.
+`03c_crossModality_plots.qmd` compares these four `run_lr_coloc_pipeline()` results against the LIANA+ output from `03b_runLiana_scRNAseq.ipynb`. Saving them here means 03c doesn't have to reload the Visium object or rerun the pipelines.
 
-## Astrocyte - Vascular
+```{r save-spatial-pipelines, warning=FALSE}
+lr_coloc_pipelines <- list(
+  astro_vasc     = astro_vasc,
+  vasc_microglia = vasc_microglia,
+  opc_cr         = opc_cr,
+  neuro_gc       = neuro_gc
+)
 
-```{r liana-compare-astro-vasc, warning=FALSE, fig.height=10, fig.width=10}
-astro_vasc_liana <- compare_spatial_to_liana(astro_vasc, "liana_astro_vasc_by_age.csv")
-
-astro_vasc_liana$pairs_dropped_incomplete   # pairs missing an age in one of the joined tables
-astro_vasc_liana$agreement_check
-
-plot_cross_modality_trajectory(astro_vasc_liana,
-                                "Astrocyte-Vascular: spatial and scRNA evidence moving together with age")
-
-astro_vasc_liana$pair_detail_wide
-```
-
-## Vascular - Microglia
-
-```{r liana-compare-vasc-microglia, warning=FALSE, fig.height=10, fig.width=10}
-vasc_microglia_liana <- compare_spatial_to_liana(vasc_microglia, "liana_vasc_microglia_by_age.csv")
-
-vasc_microglia_liana$pairs_dropped_incomplete
-vasc_microglia_liana$agreement_check
-
-plot_cross_modality_trajectory(vasc_microglia_liana,
-                                "Vascular-Microglia: spatial and scRNA evidence moving together with age")
-
-vasc_microglia_liana$pair_detail_wide
-```
-
-## OPC - Cajal-Retzius
-
-```{r liana-compare-opc-cr, warning=FALSE, fig.height=10, fig.width=10}
-opc_cr_liana <- compare_spatial_to_liana(opc_cr, "liana_opc_cr_by_age.csv")
-
-opc_cr_liana$pairs_dropped_incomplete
-opc_cr_liana$agreement_check
-
-plot_cross_modality_trajectory(opc_cr_liana,
-                                "OPC-Cajal-Retzius: spatial and scRNA evidence moving together with age")
-
-opc_cr_liana$pair_detail_wide
-```
-
-## Neurogenic_lineage - GC
-
-```{r liana-compare-neuro-gc, warning=FALSE, fig.height=10, fig.width=10}
-neuro_gc_liana <- compare_spatial_to_liana(neuro_gc, "liana_neuro_gc_by_age.csv")
-
-neuro_gc_liana$pairs_dropped_incomplete
-neuro_gc_liana$agreement_check
-
-plot_cross_modality_trajectory(neuro_gc_liana,
-                                "Neurogenic_lineage-GC: spatial and scRNA evidence moving together with age")
-
-neuro_gc_liana$pair_detail_wide
-```
-
-# Export the curated (3-metric-agreement) significant LR pairs
-
-The four `pair_detail_wide` tables above are already restricted to the pairs where all 3 metrics -- spatial slope, spatial detection enrichment, and scRNA `magnitude_rank` -- agree in sign on their young-to-old shift (`compare_spatial_to_liana()`'s `agreement_check` filter). This is the curated set shown in the `plot_cross_modality_trajectory()` plots above, as opposed to every raw candidate pair in the `liana_*_by_age.csv` files. Exporting it here lets downstream notebooks (`06`, `07`, `08`, `10`) read exactly this curated set directly.
-
-```{r export-significant-lr-pairs, warning=FALSE}
-significant_lr_pairs <- bind_rows(
-  astro_vasc_liana$pair_detail_wide     %>% mutate(spatial_pair = "Astrocyte-Vascular"),
-  vasc_microglia_liana$pair_detail_wide %>% mutate(spatial_pair = "Vascular-Microglia"),
-  opc_cr_liana$pair_detail_wide         %>% mutate(spatial_pair = "OPC-Cajal-Retzius"),
-  neuro_gc_liana$pair_detail_wide       %>% mutate(spatial_pair = "Neurogenic_lineage-GC")
-) %>%
-  dplyr::select(spatial_pair, pair, ligand_complex, receptor_complex,
-                direction_young, direction_middle, direction_old, direction_consistent,
-                slope_shift, enrichment_shift, scrna_shift,
-                slope_pattern, enrichment_pattern)
-
-write.csv(significant_lr_pairs, "significant_lr_pairs.csv", row.names = FALSE)
-significant_lr_pairs
+saveRDS(lr_coloc_pipelines, file.path(out_dir, "lr_coloc_pipelines.rds"))
 ```

@@ -1,0 +1,146 @@
+---
+title: "03c — Cross-modality comparison: spatial vs LIANA+ scRNA-seq"
+subtitle: "Joins the 03a spatial LR-colocalization results to the 03b LIANA+ results"
+date: today
+format:
+  html:
+    theme: flatly
+    toc: true
+    toc-depth: 3
+    toc-location: left
+    toc-expand: true
+    number-sections: true
+    code-fold: true
+    code-summary: "Show code"
+    code-tools: true
+    code-overflow: wrap
+    code-line-numbers: false
+    df-print: paged
+    fig-align: center
+    fig-width: 9
+    fig-height: 6
+    anchor-sections: true
+    smooth-scroll: true
+    embed-resources: true
+grid:
+  body-width: 1100px
+execute:
+  warning: false
+  message: false
+  echo: true
+---
+
+## Setup
+
+```{r libraries}
+suppressPackageStartupMessages({
+  library(Matrix)
+  library(dplyr)
+  library(ggplot2)
+  library(purrr)
+  library(tidyr)
+  library(readr)
+  library(tibble)
+  library(patchwork)
+  library(forcats)
+  library(ggrepel)
+})
+
+source("helper_functions.R")
+```
+
+```{r paths}
+out_dir   <- file.path("output", "03_RCTD_SpotDeconvolution") 
+liana_dir <- file.path("output", "03b_runLiana_scRNAseq") 
+```
+
+## Load the spatial pipeline results from 03a
+
+```{r load-spatial-pipelines}
+lr_coloc_pipelines <- readRDS(file.path(out_dir, "lr_coloc_pipelines.rds"))
+
+astro_vasc     <- lr_coloc_pipelines$astro_vasc
+vasc_microglia <- lr_coloc_pipelines$vasc_microglia
+opc_cr         <- lr_coloc_pipelines$opc_cr
+neuro_gc       <- lr_coloc_pipelines$neuro_gc
+```
+
+# Compare each pair's spatial results to its LIANA+ CCC scRNA-seq results
+
+`compare_spatial_to_liana()` and `plot_cross_modality_trajectory()` (helper_functions.R) join a spatial pipeline result to its matching age-split LIANA+ CSV and check 3-way sign agreement (spatial slope, spatial detection enrichment, scRNA evidence) on the young-to-old shift.
+
+## Astrocyte - Vascular
+
+```{r liana-compare-astro-vasc, warning=FALSE, fig.height=10, fig.width=10}
+astro_vasc_liana <- compare_spatial_to_liana(astro_vasc, file.path(liana_dir, "liana_astro_vasc_by_age.csv"))
+
+astro_vasc_liana$pairs_dropped_incomplete   # pairs missing an age in one of the joined tables
+astro_vasc_liana$agreement_check
+
+plot_cross_modality_trajectory(astro_vasc_liana,
+                                "Astrocyte-Vascular: spatial and scRNA evidence moving together with age")
+
+astro_vasc_liana$pair_detail_wide
+```
+
+## Vascular - Microglia
+
+```{r liana-compare-vasc-microglia, warning=FALSE, fig.height=10, fig.width=10}
+vasc_microglia_liana <- compare_spatial_to_liana(vasc_microglia, file.path(liana_dir, "liana_vasc_microglia_by_age.csv"))
+
+vasc_microglia_liana$pairs_dropped_incomplete
+vasc_microglia_liana$agreement_check
+
+plot_cross_modality_trajectory(vasc_microglia_liana,
+                                "Vascular-Microglia: spatial and scRNA evidence moving together with age")
+
+vasc_microglia_liana$pair_detail_wide
+```
+
+## OPC - Cajal-Retzius
+
+```{r liana-compare-opc-cr, warning=FALSE, fig.height=10, fig.width=10}
+opc_cr_liana <- compare_spatial_to_liana(opc_cr, file.path(liana_dir, "liana_opc_cr_by_age.csv"))
+
+opc_cr_liana$pairs_dropped_incomplete
+opc_cr_liana$agreement_check
+
+plot_cross_modality_trajectory(opc_cr_liana,
+                                "OPC-Cajal-Retzius: spatial and scRNA evidence moving together with age")
+
+opc_cr_liana$pair_detail_wide
+```
+
+## Neurogenic_lineage - GC
+
+```{r liana-compare-neuro-gc, warning=FALSE, fig.height=10, fig.width=10}
+neuro_gc_liana <- compare_spatial_to_liana(neuro_gc, file.path(liana_dir, "liana_neuro_gc_by_age.csv"))
+
+neuro_gc_liana$pairs_dropped_incomplete
+neuro_gc_liana$agreement_check
+
+plot_cross_modality_trajectory(neuro_gc_liana,
+                                "Neurogenic_lineage-GC: spatial and scRNA evidence moving together with age")
+
+neuro_gc_liana$pair_detail_wide
+```
+
+# Export the curated (3-metric-agreement) significant LR pairs
+
+The four `pair_detail_wide` tables above are already restricted to the pairs where all 3 metrics -- spatial slope, spatial detection enrichment, and scRNA `magnitude_rank` -- agree in sign on their young-to-old shift (`compare_spatial_to_liana()`'s `agreement_check` filter). This is the curated set shown in the `plot_cross_modality_trajectory()` plots above, as opposed to every raw candidate pair in the `liana_*_by_age.csv` files. Exporting it here.
+
+```{r export-significant-lr-pairs, warning=FALSE}
+significant_lr_pairs <- bind_rows(
+  astro_vasc_liana$pair_detail_wide     %>% mutate(spatial_pair = "Astrocyte-Vascular"),
+  vasc_microglia_liana$pair_detail_wide %>% mutate(spatial_pair = "Vascular-Microglia"),
+  opc_cr_liana$pair_detail_wide         %>% mutate(spatial_pair = "OPC-Cajal-Retzius"),
+  neuro_gc_liana$pair_detail_wide       %>% mutate(spatial_pair = "Neurogenic_lineage-GC")
+) %>%
+  dplyr::select(spatial_pair, pair, ligand_complex, receptor_complex,
+                direction_young, direction_middle, direction_old, direction_consistent,
+                slope_shift, enrichment_shift, scrna_shift,
+                slope_pattern, enrichment_pattern)
+
+write.csv(significant_lr_pairs, file.path(out_dir, "significant_lr_pairs.csv"), row.names = FALSE)
+significant_lr_pairs
+```

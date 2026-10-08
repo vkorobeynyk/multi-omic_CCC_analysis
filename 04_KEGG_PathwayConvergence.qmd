@@ -1,0 +1,318 @@
+---
+title: "KEGG Pathway-Map Convergence Across the Four Significant LR Lists"
+subtitle: "Does any other significant pair belong to a real, named KEGG diagram?"
+date: today
+format:
+  html:
+    theme: flatly
+    toc: true
+    toc-depth: 3
+    toc-location: left
+    toc-expand: true
+    number-sections: true
+    code-fold: true
+    code-summary: "Show code"
+    code-tools: true
+    code-overflow: wrap
+    code-line-numbers: false
+    df-print: paged
+    fig-align: center
+    fig-width: 9
+    fig-height: 6
+    anchor-sections: true
+    smooth-scroll: true
+    embed-resources: true
+grid:
+  body-width: 1100px
+execute:
+  warning: false
+  message: false
+  echo: true
+---
+
+## Overview
+
+This notebook asks: does a gene from one of the four significant-LR lists belong to a **curated KEGG pathway diagram** -- and if so, does a gene from a *different* cell-type-pair's list also belong to that same diagram?.
+
+```{r setup}
+#| label: setup
+library(tidyverse)
+
+if (!requireNamespace("KEGGREST", quietly = TRUE)) {
+  if (!requireNamespace("BiocManager", quietly = TRUE)) install.packages("BiocManager")
+  BiocManager::install("KEGGREST", update = FALSE, ask = FALSE)
+}
+library(KEGGREST)
+```
+
+## Helpers: exact-match KEGG gene resolution + pathway membership, with local caching
+
+`KEGGREST::keggFind()` does a **substring** search across gene names and aliases. 
+Results are cached to a local RDS file
+
+```{r kegg-helpers}
+#| label: kegg-helpers
+
+out_dir <- file.path("output", "04_KEGG_PathwayConvergence")
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+
+kegg_cache_path <- file.path(out_dir, "kegg_pathway_cache.rds")
+kegg_cache <- if (file.exists(kegg_cache_path)) readRDS(kegg_cache_path) else list()
+
+save_kegg_cache <- function() saveRDS(kegg_cache, kegg_cache_path)
+
+#' Resolve a gene symbol to its exact KEGG gene ID (e.g. "mmu:19242") for a
+#' given organism code ("mmu" = mouse, "hsa" = human). Returns NA if no exact
+#' match is found among that gene's own alias list.
+resolve_kegg_gene_id <- function(gene_symbol, organism = "mmu") {
+  hits <- tryCatch(KEGGREST::keggFind(organism, gene_symbol), error = function(e) NULL)
+  if (is.null(hits) || length(hits) == 0) return(NA_character_)
+
+  # hits is a named character vector: names = "mmu:19242", values = "Ptn, HARP, ...; pleiotrophin precursor"
+  aliases_by_hit <- hits %>%
+    stringr::str_split(";") %>%
+    purrr::map_chr(1) %>%             
+    stringr::str_split(",\\s*")
+
+  exact_match <- purrr::map_lgl(aliases_by_hit, ~ gene_symbol %in% .x)
+  matched_ids <- names(hits)[exact_match]
+
+  if (length(matched_ids) == 0) return(NA_character_)
+  matched_ids[1]  # first exact match if somehow more than one
+}
+
+#' Full mouse pathway id -> name lookup table, fetched once and cached
+#' (one API call returns all ~560 mouse pathways; joining against this
+#' locally is far more robust than querying KEGG per-pathway-id -- KEGG's
+#' /list endpoint 404s on a specific "path:mmuXXXXX" entry, confirmed by
+#' testing directly against the live API before relying on it here).
+get_mmu_pathway_names <- function() {
+  cache_key <- "mmu_pathway_names_table"
+  if (!is.null(kegg_cache[[cache_key]])) return(kegg_cache[[cache_key]])
+
+  raw <- KEGGREST::keggList("pathway", "mmu")
+  tbl <- tibble(pathway_id = names(raw), pathway_name = stringr::str_remove(unname(raw), " - .*$"))
+
+  kegg_cache[[cache_key]] <<- tbl
+  save_kegg_cache()
+  tbl
+}
+mmu_pathway_names <- get_mmu_pathway_names()
+
+#' Get the set of KEGG pathway IDs + names a gene belongs to. Cached.
+get_kegg_pathways <- function(gene_symbol, organism = "mmu") {
+  cache_key <- paste(organism, gene_symbol, sep = "::")
+  if (!is.null(kegg_cache[[cache_key]])) return(kegg_cache[[cache_key]])
+
+  kegg_id <- resolve_kegg_gene_id(gene_symbol, organism)
+  result <- if (is.na(kegg_id)) {
+    tibble(gene = gene_symbol, kegg_id = NA_character_, pathway_id = NA_character_, pathway_name = NA_character_)
+  } else {
+    links <- tryCatch(KEGGREST::keggLink("pathway", kegg_id), error = function(e) character(0))
+    if (length(links) == 0) {
+      tibble(gene = gene_symbol, kegg_id = kegg_id, pathway_id = NA_character_, pathway_name = NA_character_)
+    } else {
+      pathway_ids <- stringr::str_remove(unname(links), "^path:")
+      tibble(gene = gene_symbol, kegg_id = kegg_id, pathway_id = pathway_ids) %>%
+        dplyr::left_join(mmu_pathway_names, by = "pathway_id")
+    }
+  }
+
+  kegg_cache[[cache_key]] <<- result
+  save_kegg_cache()
+  Sys.sleep(0.34)  # free KEGG REST API (~3 req/sec)
+  result
+}
+```
+
+## Load the four significant-LR lists
+
+Reads `significant_lr_pairs.csv`, exported by `03c_crossModality_plots.qmd`'s where exactly the pairs where spatial slope, spatial detection enrichment, and scRNA `magnitude_rank` all agree in sign on their young-to-old shift -- the same pairs shown in the `plot_cross_modality_trajectory()` plots.
+
+```{r load-lr-lists}
+#| label: load-lr-lists
+
+# Named only for display / for the pathview color-coding step further down 
+spatial_pair_labels <- c("Astrocyte-Vascular", "Vascular-Microglia",
+                          "OPC-Cajal-Retzius", "Neurogenic_lineage-GC")
+
+sig_pairs <- readr::read_csv(file.path("output", "03_RCTD_SpotDeconvolution", "significant_lr_pairs.csv"), show_col_types = FALSE) %>%
+  distinct(spatial_pair, ligand_complex, receptor_complex)
+
+# Complexes come through as e.g. "GeneA_GeneB" -- split those into individual
+# subunits before KEGG lookup, since KEGG genes are single proteins.
+split_complex <- function(x) stringr::str_split(x, "_")
+
+lr_gene_sets <- purrr::pmap(sig_pairs, function(spatial_pair, ligand_complex, receptor_complex) {
+  ligands   <- unlist(split_complex(ligand_complex))
+  receptors <- unlist(split_complex(receptor_complex))
+  tibble(
+    spatial_pair = spatial_pair,
+    gene = unique(c(ligands, receptors)),
+    role = ifelse(unique(c(ligands, receptors)) %in% ligands, "ligand", "receptor")
+    # note: a gene acting as both ligand and receptor across different rows
+    # will just get whichever role its first occurrence had -- role is
+    # informational only and doesn't affect the pathway lookup below.
+  )
+})
+
+lr_genes_long <- bind_rows(lr_gene_sets) %>% distinct(spatial_pair, gene, role)
+lr_genes_long
+```
+
+## Cross-reference every gene against KEGG pathway membership
+
+This is the step that hits the KEGG API (cached after the first run, so re-rendering is fast).
+
+```{r kegg-crossref}
+#| label: kegg-crossref
+
+unique_genes <- unique(lr_genes_long$gene)
+
+gene_pathway_map <- purrr::map_dfr(unique_genes, get_kegg_pathways) %>%
+  filter(!is.na(pathway_id))
+
+# Join back to spatial_pair (a gene can appear in more than one LR list) --
+# keep role here (not just spatial_pair/gene) since convergence-detail below
+# selects it back out.
+gene_pathway_by_pair <- lr_genes_long %>%
+  distinct(spatial_pair, gene, role) %>%
+  inner_join(gene_pathway_map, by = "gene")
+
+gene_pathway_by_pair
+```
+
+## Convergence pathways: hit by 2+ different cell-type-pair analyses
+
+```{r convergence}
+#| label: convergence
+
+convergence_pathways <- gene_pathway_by_pair %>%
+  distinct(spatial_pair, pathway_id, pathway_name, gene) %>%
+  group_by(pathway_id, pathway_name) %>%
+  summarise(
+    n_spatial_pairs_hitting_it = n_distinct(spatial_pair),
+    n_distinct_genes           = n_distinct(gene),
+    .groups = "drop"
+  ) %>%
+  filter(n_spatial_pairs_hitting_it >= 2) %>%
+  # The interesting case is *different* genes from different lists landing on
+  # the same pathway
+  arrange(desc(n_distinct_genes > 1), desc(n_spatial_pairs_hitting_it))
+
+convergence_pathways
+```
+
+For each convergence pathway, which genes (and from which spatial pair) actually land there:
+
+```{r convergence-detail}
+#| label: convergence-detail
+
+convergence_detail <- gene_pathway_by_pair %>%
+  semi_join(convergence_pathways, by = "pathway_id") %>%
+  arrange(pathway_id, spatial_pair) %>%
+  dplyr::select(pathway_id, pathway_name, spatial_pair, gene, role)
+
+convergence_detail
+```
+
+## Export for downstream synthesis
+
+Used in `06_Synthesis_FunctionBySpatialPair.qmd`, which combines this notebook's KEGG-pathway convergence with `05_STRING_NetworkAnalysis.qmd`'s cluster convergence into one summary.
+
+```{r export-kegg-synthesis}
+#| label: export-kegg-synthesis
+
+write_csv(gene_pathway_by_pair, file.path(out_dir, "kegg_gene_pathway_by_pair.csv"))
+write_csv(convergence_pathways, file.path(out_dir, "kegg_convergence_pathways.csv"))
+```
+
+
+## Notes on interpretation
+
+A pathway showing up as "convergent" here means genes from two different cell-type-pair analyses both belong to that named KEGG map -- it does not mean the two LR pairs interact directly, only that both push their respective cell types toward the same broader curated pathway.
+
+
+## Render the actual KEGG diagram with your genes highlighted
+
+This reproduces the picture-style output using `pathview`, coloring each gene by which of your four cell-type-pair lists it came from. 
+
+```{r pathview-setup}
+#| label: pathview-setup
+#| eval: true
+
+if (!requireNamespace("pathview", quietly = TRUE)) BiocManager::install("pathview", update = FALSE, ask = FALSE)
+if (!requireNamespace("org.Mm.eg.db", quietly = TRUE)) BiocManager::install("org.Mm.eg.db", update = FALSE, ask = FALSE)
+library(pathview)   
+library(org.Mm.eg.db) 
+
+data(bods, package = "pathview")
+data(korg, package = "pathview")
+```
+
+```{r pathview-render}
+#| label: pathview-render
+#| eval: false
+
+# Example: render the top convergence pathway from the table above.
+target_pathway_id <- stringr::str_remove(convergence_pathways$pathway_id[1], "^mmu")
+
+pair_codes <- setNames(seq_along(spatial_pair_labels), spatial_pair_labels)
+
+gene_group_code <- gene_pathway_by_pair %>%
+  filter(pathway_id == convergence_pathways$pathway_id[1]) %>%
+  distinct(gene, spatial_pair) %>%
+  group_by(gene) %>%
+  summarise(code = if (n() > 1) length(spatial_pair_labels) + 1 else pair_codes[spatial_pair[1]], .groups = "drop")
+
+gene_data_vec <- setNames(gene_group_code$code, gene_group_code$gene)
+
+map_symbol_to_entrez <- function(gene_symbols, orgdb = org.Mm.eg.db) {
+  safe_map <- function(keys_vec, keytype) {
+    if (length(keys_vec) == 0) return(character(0))
+    tryCatch(
+      AnnotationDbi::mapIds(orgdb, keys = keys_vec, column = "ENTREZID", keytype = keytype, multiVals = "first"),
+      error = function(e) setNames(rep(NA_character_, length(keys_vec)), keys_vec)
+    )
+  }
+
+  primary <- safe_map(gene_symbols, "SYMBOL")
+  unresolved <- names(primary)[is.na(primary)]
+  if (length(unresolved) > 0) {
+    fallback <- safe_map(unresolved, "ALIAS")
+    still_na <- is.na(fallback)
+    primary[names(fallback)[!still_na]] <- fallback[!still_na]
+  }
+  primary
+}
+
+entrez_ids <- map_symbol_to_entrez(names(gene_data_vec))
+
+gene_data_entrez <- gene_data_vec
+names(gene_data_entrez) <- unname(entrez_ids[names(gene_data_vec)])
+unmapped <- gene_group_code$gene[is.na(names(gene_data_entrez))]
+if (length(unmapped) > 0) {
+  message("Dropping gene(s) with no org.Mm.eg.db Entrez match (via SYMBOL or ALIAS): ", paste(unmapped, collapse = ", "))
+}
+gene_data_entrez <- gene_data_entrez[!is.na(names(gene_data_entrez))]
+
+if (length(gene_data_entrez) == 0) {
+  stop("None of this pathway's genes resolved to an Entrez ID via org.Mm.eg.db -- ",
+       "check gene symbol spelling/casing in the significant-LR CSVs.")
+}
+
+old_wd <- setwd(out_dir)
+tryCatch(
+  pathview(
+    gene.data   = gene_data_entrez,
+    pathway.id  = target_pathway_id,
+    species     = "mmu",
+    gene.idtype = "entrez",  
+    out.suffix  = "convergence",
+    kegg.native = TRUE
+  ),
+  finally = setwd(old_wd)
+)
+# Produces mmu<target_pathway_id>.convergence.png in out_dir --
+# the official KEGG diagram with your genes colored by contributing list.
+```

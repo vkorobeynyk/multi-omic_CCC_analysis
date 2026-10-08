@@ -1,12 +1,10 @@
-# ---- Raw / processed data (too large for GitHub, regenerable from scripts) ----
+# ---- Everything the scripts generate ----
+output/
+
+# ---- Raw input data (too large for GitHub) ----
 STARmap_PLUS_data/
-visium_processed/
-visium_clustered/
-ref_export/
-rctd_by_region/
-starmap_plus_processed/
-RCTD_output/
-nichenet_cache/
+
+# ---- Large binary formats, wherever they end up ----
 *.rds
 *.RDS
 *.mtx
@@ -22,9 +20,7 @@ nichenet_cache/
 .Rproj.user/
 .ipynb_checkpoints/
 omnipathr-log/
-
-# ---- Generated figures ----
-# pathview (06) writes KEGG maps into the working directory
-mmu*.png
-mmu*.xml
 Claude outputs/
+
+# ---- render_all.sh logs ----
+render_logs/

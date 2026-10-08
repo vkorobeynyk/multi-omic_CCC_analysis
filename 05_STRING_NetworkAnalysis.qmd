@@ -1,0 +1,316 @@
+---
+title: "STRING Functional-Association Network Across the Four Significant LR Lists"
+subtitle: "Do genes from independent cell-type-pair analyses share a real interaction/functional module?"
+date: today
+format:
+  html:
+    theme: flatly
+    toc: true
+    toc-depth: 3
+    toc-location: left
+    toc-expand: true
+    number-sections: true
+    code-fold: true
+    code-summary: "Show code"
+    code-tools: true
+    code-overflow: wrap
+    code-line-numbers: false
+    df-print: paged
+    fig-align: center
+    fig-width: 9
+    fig-height: 6
+    anchor-sections: true
+    smooth-scroll: true
+    embed-resources: true
+grid:
+  body-width: 1100px
+execute:
+  warning: false
+  message: false
+  echo: true
+---
+
+## Overview
+
+`04_KEGG_PathwayConvergence.qmd` asks whether genes from two different cell-type-pair analyses land on the same **curated KEGG pathway diagram**. That's one specific, fairly narrow curated resource. This notebook asks the same underlying convergence question a different way: do genes from independent cell-type-pair analyses sit in the same **functional-association network module**, using STRING's combined evidence (curated databases, experiments, co-expression, and text-mining, not just KEGG)?
+
+
+```{r setup}
+#| label: setup
+library(tidyverse)
+
+if (!requireNamespace("STRINGdb", quietly = TRUE)) {
+  if (!requireNamespace("BiocManager", quietly = TRUE)) install.packages("BiocManager")
+  BiocManager::install("STRINGdb", update = FALSE, ask = FALSE)
+}
+library(STRINGdb)
+```
+
+## Load the curated significant-LR gene list
+
+Same source as `04_KEGG_PathwayConvergence.qmd`: `significant_lr_pairs.csv`, exported by `03_RCTD_SpotDeconvolution.qmd`'s "Export the curated (3-metric-agreement) significant LR pairs" section.
+
+```{r load-lr-lists}
+#| label: load-lr-lists
+
+split_complex <- function(x) stringr::str_split(x, "_")
+
+out_dir <- file.path("output", "05_STRING_NetworkAnalysis")
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+
+sig_pairs <- readr::read_csv(file.path("output", "03_RCTD_SpotDeconvolution", "significant_lr_pairs.csv"), show_col_types = FALSE) %>%
+  distinct(spatial_pair, ligand_complex, receptor_complex)
+
+lr_gene_sets <- purrr::pmap(sig_pairs, function(spatial_pair, ligand_complex, receptor_complex) {
+  ligands   <- unlist(split_complex(ligand_complex))
+  receptors <- unlist(split_complex(receptor_complex))
+  tibble(
+    spatial_pair = spatial_pair,
+    gene = unique(c(ligands, receptors)),
+    role = ifelse(unique(c(ligands, receptors)) %in% ligands, "ligand", "receptor")
+  )
+})
+
+lr_genes_long <- bind_rows(lr_gene_sets) %>% distinct(spatial_pair, gene, role)
+unique_genes  <- unique(lr_genes_long$gene)
+
+lr_genes_long
+```
+
+## Build the STRING network and map genes to STRING IDs
+
+Mouse NCBI taxonomy ID is `10090`. `score_threshold = 400` is STRING's own "medium confidence" default; raise it (e.g. to `700`, "high confidence") later to check whether clusters hold up on stronger evidence alone.
+
+
+```{r string-init}
+#| label: string-init
+
+string_db <- STRINGdb$new(
+  version         = "12.0",
+  species         = 10090,
+  score_threshold = 400,
+  input_directory = ""
+)
+
+
+map_genes_safe <- function(string_db, genes) {
+  gene_df <- data.frame(gene = genes, stringsAsFactors = FALSE)
+  rownames(gene_df) <- NULL
+
+  tryCatch(
+    string_db$map(gene_df, "gene", removeUnmappedRows = TRUE),
+    error = function(e) {
+      message("Bulk STRINGdb$map() failed (", conditionMessage(e), ") -- ",
+              "falling back to mapping genes one at a time.")
+      purrr::map_dfr(genes, function(g) {
+        one <- data.frame(gene = g, stringsAsFactors = FALSE)
+        tryCatch(
+          string_db$map(one, "gene", removeUnmappedRows = TRUE, quiet = TRUE),
+          error = function(e2) {
+            message("  Dropping '", g, "' -- STRINGdb$map() errors on it individually (",
+                    conditionMessage(e2), ")")
+            NULL
+          }
+        )
+      })
+    }
+  )
+}
+
+mapped <- map_genes_safe(string_db, unique_genes)
+
+unmapped_genes <- setdiff(unique_genes, mapped$gene)
+if (length(unmapped_genes) > 0) {
+  message("No STRING mapping found for: ", paste(unmapped_genes, collapse = ", "),
+          " -- coverage gap in STRING's identifier mapping, not evidence against real biology.")
+}
+
+mapped
+```
+
+## Cluster the network (k = 4 k-means)
+
+
+```{r string-clusters}
+#| label: string-clusters
+
+n_clusters <- 4
+
+interactions <- string_db$get_interactions(mapped$STRING_id)
+
+score_col <- intersect(c("combined_score", "score"), names(interactions))[1]
+if (is.na(score_col)) {
+  stop("Couldn't find a combined-score column in string_db$get_interactions() output. ",
+       "Columns present: ", paste(names(interactions), collapse = ", "),
+       " -- check the STRINGdb version's return format and adjust score_col above.")
+}
+
+ids <- mapped$STRING_id
+
+degree_tbl <- tibble(STRING_id = c(interactions$from, interactions$to)) %>%
+  dplyr::filter(STRING_id %in% ids) %>%
+  dplyr::count(STRING_id, name = "degree")
+
+connected_ids <- intersect(ids, degree_tbl$STRING_id[degree_tbl$degree > 0])
+isolated_ids  <- setdiff(ids, connected_ids)
+
+isolated_genes <- mapped %>% dplyr::filter(STRING_id %in% isolated_ids) %>% dplyr::pull(gene)
+if (length(isolated_genes) > 0) {
+  message("Not clustered (no interaction edges to anything else in this gene set): ",
+          paste(isolated_genes, collapse = ", "))
+}
+
+score_matrix <- matrix(0, nrow = length(connected_ids), ncol = length(connected_ids),
+                        dimnames = list(connected_ids, connected_ids))
+
+idx_from <- match(interactions$from, connected_ids)
+idx_to   <- match(interactions$to, connected_ids)
+valid    <- !is.na(idx_from) & !is.na(idx_to)
+
+score_matrix[cbind(idx_from[valid], idx_to[valid])] <- interactions[[score_col]][valid]
+score_matrix[cbind(idx_to[valid], idx_from[valid])] <- interactions[[score_col]][valid]
+
+set.seed(1) 
+km <- kmeans(score_matrix, centers = n_clusters, nstart = 50)
+
+cluster_df <- dplyr::bind_rows(
+  tibble(STRING_id = connected_ids, cluster = km$cluster),
+  tibble(STRING_id = isolated_ids, cluster = NA_integer_)
+)
+
+gene_cluster <- mapped %>%
+  dplyr::select(gene, STRING_id) %>%
+  inner_join(cluster_df, by = "STRING_id") %>%
+  inner_join(lr_genes_long, by = "gene", relationship = "many-to-many")
+
+gene_cluster %>% arrange(cluster, gene)
+```
+
+## Convergence: clusters hit by 2+ different cell-type-pair analyses
+
+Same convergence framing as `04_KEGG_PathwayConvergence.qmd`'s `convergence_pathways` table, applied to STRING's data-driven clusters instead of named KEGG pathways.
+
+```{r string-convergence}
+#| label: string-convergence
+
+string_convergence <- gene_cluster %>%
+  dplyr::filter(!is.na(cluster)) %>%   # drop the "not clustered" (zero-edge) genes
+  distinct(spatial_pair, cluster, gene) %>%
+  group_by(cluster) %>%
+  summarise(
+    n_spatial_pairs_hitting_it = n_distinct(spatial_pair),
+    n_distinct_genes           = n_distinct(gene),
+    genes                      = paste(sort(unique(gene)), collapse = ", "),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(n_spatial_pairs_hitting_it), desc(n_distinct_genes))
+
+string_convergence
+```
+
+Per-cluster detail, mirroring `04`'s `convergence_detail`:
+
+```{r string-convergence-detail}
+#| label: string-convergence-detail
+
+string_convergence_detail <- gene_cluster %>%
+  semi_join(string_convergence %>% filter(n_spatial_pairs_hitting_it >= 2), by = "cluster") %>%
+  distinct(cluster, spatial_pair, gene, role) %>%
+  arrange(cluster, spatial_pair)
+
+string_convergence_detail
+```
+
+## Export for downstream synthesis (part 1 of 2)
+
+`gene_cluster` is exported here, right after the k = 4 clustering it's built from; the enrichment half is exported further down once `enrichment_by_cluster` exists. Both feed `06_Synthesis_FunctionBySpatialPair.qmd`.
+
+```{r export-string-clusters}
+#| label: export-string-clusters
+
+write_csv(gene_cluster %>% dplyr::filter(!is.na(cluster)), file.path(out_dir, "string_gene_cluster.csv"))
+```
+
+## Full enrichment tables (whole network)
+
+
+```{r string-enrichment-all}
+#| label: string-enrichment-all
+
+enrichment_all <- string_db$get_enrichment(mapped$STRING_id)
+
+fdr_col <- intersect(c("fdr", "false_discovery_rate", "p_value"), names(enrichment_all))[1]
+cat_col <- intersect(c("category"), names(enrichment_all))[1]
+
+# Grouped by category (Process/Function/Component/KEGG/RCTM/Keyword/...) then by
+# FDR within each, so it reads like the website's sectioned enrichment panel.
+if (!is.na(cat_col)) {
+  enrichment_all %>% arrange(.data[[cat_col]], .data[[fdr_col]])
+} else {
+  enrichment_all %>% arrange(.data[[fdr_col]])
+}
+```
+
+## Export for downstream synthesis (part 2 of 2)
+
+```{r export-string-enrichment}
+#| label: export-string-enrichment
+
+write_csv(enrichment_all, file.path(out_dir, "string_whole_network_enrichment.csv"))
+```
+
+## Network plot, coloured by cluster
+
+
+```{r string-plot, fig.width=11, fig.height=11}
+#| label: string-plot
+
+for (pkg in c("igraph", "tidygraph", "ggraph", "ggrepel")) {
+  if (!requireNamespace(pkg, quietly = TRUE)) install.packages(pkg)
+}
+library(ggraph)
+
+cluster_palette <- c("1" = "#2a78d6", "2" = "#eb6834", "3" = "#1baf7a", "4" = "#eda100")
+
+# Drop the "not clustered" (zero-edge) genes from the picture
+net_nodes <- cluster_df %>%
+  dplyr::filter(!is.na(cluster)) %>%
+  left_join(mapped %>% dplyr::select(gene, STRING_id), by = "STRING_id") %>%
+  mutate(cluster = factor(cluster))
+
+net_edges <- interactions %>%
+  dplyr::filter(from %in% net_nodes$STRING_id, to %in% net_nodes$STRING_id) %>%
+  dplyr::select(from, to, weight = all_of(score_col))
+
+net_graph <- tidygraph::tbl_graph(nodes = net_nodes, edges = net_edges,
+                                   node_key = "STRING_id", directed = FALSE)
+
+set.seed(1)
+ggraph(net_graph, layout = "fr") +
+  ggraph::geom_edge_link(ggplot2::aes(alpha = weight), colour = "#c3c2b7", show.legend = FALSE) +
+  ggraph::scale_edge_alpha(range = c(0.15, 0.6)) +
+  ggraph::geom_node_point(ggplot2::aes(colour = cluster), size = 7) +
+  ggraph::geom_node_text(ggplot2::aes(label = gene), repel = TRUE, size = 3, colour = "#0b0b0b") +
+  ggplot2::scale_colour_manual(values = cluster_palette, name = paste0("Cluster (k = ", n_clusters, ")")) +
+  ggplot2::theme_void(base_size = 12) +
+  ggplot2::theme(
+    legend.position   = "right",
+    plot.background   = ggplot2::element_rect(fill = "#fcfcfb", colour = NA),
+    panel.background  = ggplot2::element_rect(fill = "#fcfcfb", colour = NA)
+  ) +
+  ggplot2::labs(title = "STRING network, coloured by k-means cluster")
+```
+
+
+```{r string-plot-default}
+#| label: string-plot-default
+#| eval: false
+
+string_db$plot_network(mapped$STRING_id)
+```
+
+## Notes on interpretation
+
+A STRING cluster hit by 2+ different `spatial_pair` analyses is a functional-association-level convergence claim: it means those genes are linked by STRING's combined evidence (some mix of curated databases, experiments, co-expression, and text-mining), not that the original LR pairs interact directly. Same caveat as `04`'s KEGG convergence table.
+
+**Evidence-channel robustness check:** everything above uses `score_threshold = 400` (STRING's "medium confidence," mixing text-mining in with harder evidence). Re-run `STRINGdb$new()` with `score_threshold = 700` ("high confidence") to see which clusters and convergence hits survive on stronger evidence alone -- a cluster that only holds together at the lower threshold is more likely inflated by text-mining co-occurrence rather than real mechanistic support.

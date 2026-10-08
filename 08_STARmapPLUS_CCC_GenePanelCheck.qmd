@@ -1,0 +1,245 @@
+---
+title: "STARmap PLUS: Gene Panel Check and Export for Moran's I"
+subtitle: "Which significant LR genes from 03c/04-06 the STARmap PLUS panel covers, then export the data for the bivariate Moran's I screen in 09"
+date: today
+format:
+  html:
+    theme: flatly
+    toc: true
+    toc-depth: 3
+    toc-location: left
+    toc-expand: true
+    number-sections: true
+    code-fold: true
+    code-summary: "Show code"
+    code-tools: true
+    code-overflow: wrap
+    code-line-numbers: false
+    df-print: paged
+    fig-align: center
+    fig-width: 9
+    fig-height: 6
+    anchor-sections: true
+    smooth-scroll: true
+    embed-resources: true
+grid:
+  body-width: 1100px
+execute:
+  warning: false
+  message: false
+  echo: true
+---
+
+## Overview
+
+1. **Gene panel check.** STARmap PLUS is a targeted panel (~2,800 genes). Keeps only the significant LR pairs from `03c` whose genes are all on the panel.
+2. **Export for Python.** Log-normalizes the hippocampus object from `07` and exports expression, coordinates, metadata and the LR pairs for the bivariate Moran's I test
+
+```{r setup}
+library(dplyr)
+library(purrr)
+library(Seurat)
+library(Matrix)
+
+out_dir  <- file.path("output", "08_STARmapPLUS_CCC_GenePanelCheck")
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+hpc_path <- file.path("output", "07_STARmapPLUS_ControlSpatialObject", "starmap_plus_control_seurat_hippocampus.rds")
+```
+
+## Load the significant LR genes
+
+Complexes (`_`) are split into their subunit genes.
+
+```{r load-lr-genes}
+
+split_complex <- function(x) strsplit(x, "_")
+
+sig_pairs <- read.csv(file.path("output", "03_RCTD_SpotDeconvolution", "significant_lr_pairs.csv"), stringsAsFactors = FALSE) |>
+  distinct(spatial_pair, ligand_complex, receptor_complex)
+
+lr_gene_sets <- purrr::pmap(sig_pairs, function(spatial_pair, ligand_complex, receptor_complex) {
+  ligands   <- unlist(split_complex(ligand_complex))
+  receptors <- unlist(split_complex(receptor_complex))
+  unique(c(ligands, receptors))
+})
+
+significant_genes <- sort(unique(unlist(lr_gene_sets)))
+
+cat("Significant LR gene set size:", length(significant_genes), "\n")
+print(significant_genes)
+```
+
+## Load the STARmap PLUS hippocampus object
+
+```{r load-hippocampus}
+
+starmap_hpc <- readRDS(hpc_path)
+cat("starmap_hpc:", nrow(starmap_hpc), "genes x", ncol(starmap_hpc), "cells\n")
+```
+
+## Merge SMC + Endo into "Vascular"
+
+Matches the Visium reference, where SMC/pericytes/endothelial cells are one `Vascular` type. Stored as `celltype_merged`.
+
+```{r merge-vascular}
+
+starmap_hpc$celltype_merged <- starmap_hpc$top_level_cell_type
+starmap_hpc$celltype_merged[starmap_hpc$celltype_merged %in% c("SMC", "Endo")] <- "Vascular"
+
+cat("top_level_cell_type counts (before merge):\n")
+print(table(starmap_hpc$top_level_cell_type))
+cat("\ncelltype_merged counts (SMC + Endo -> Vascular):\n")
+print(table(starmap_hpc$celltype_merged))
+
+saveRDS(starmap_hpc, file.path(out_dir, "starmap_plus_control_seurat_hippocampus_merged.rds"))
+```
+
+## Gene panel overlap
+
+```{r gene-overlap}
+
+panel_genes <- rownames(starmap_hpc)
+
+present_genes <- intersect(significant_genes, panel_genes)
+missing_genes <- setdiff(significant_genes, panel_genes)
+
+cat("Of the", length(significant_genes), "significant LR genes:\n")
+cat(" - present in the STARmap PLUS panel:", length(present_genes), "\n")
+cat(" - missing from the panel:", length(missing_genes), "\n\n")
+
+# case-insensitive count: a big gap vs the exact match = capitalization mismatch
+present_ci <- intersect(toupper(significant_genes), toupper(panel_genes))
+cat("(Case-insensitive match count for comparison:", length(present_ci),
+    "-- a gap between this and the exact-match count above points at a capitalization",
+    "mismatch, not real absence.)\n\n")
+
+if (length(present_genes) > 0) {
+  cat("Present:\n")
+  print(present_genes)
+}
+if (length(missing_genes) > 0) {
+  cat("\nMissing:\n")
+  print(missing_genes)
+}
+```
+
+## Keep LR pairs with all genes on the panel
+
+Every subunit of both ligand and receptor must be present.
+
+```{r filter-sig-pairs}
+
+gene_all_present <- function(complex_str) {
+  genes <- unlist(split_complex(complex_str))
+  all(genes %in% panel_genes)
+}
+
+ligand_ok   <- vapply(sig_pairs$ligand_complex, gene_all_present, logical(1))
+receptor_ok <- vapply(sig_pairs$receptor_complex, gene_all_present, logical(1))
+
+sig_pairs_present <- sig_pairs[ligand_ok & receptor_ok, ]
+
+cat("LR pairs kept (both ligand and receptor fully present in the panel):",
+    nrow(sig_pairs_present), "/", nrow(sig_pairs), "\n\n")
+cat("Kept, by spatial_pair:\n")
+print(table(sig_pairs_present$spatial_pair))
+cat("\nOriginal, by spatial_pair (for comparison):\n")
+print(table(sig_pairs$spatial_pair))
+
+sig_pairs_present
+```
+
+## Cell-type vocabulary: STARmap PLUS vs. Visium reference
+
+```{r celltype-vocab-check}
+
+original_pairs <- unique(sig_pairs_present$spatial_pair)
+cat("spatial_pair values in sig_pairs_present:\n")
+print(original_pairs)
+
+pair_celltypes <- strsplit(original_pairs, "-")
+names(pair_celltypes) <- original_pairs
+
+bad_splits <- pair_celltypes[lengths(pair_celltypes) != 2]
+if (length(bad_splits) > 0) {
+  cat("\nspatial_pair values that didn't split into exactly 2 tokens on '-' (check by eye):\n")
+  print(bad_splits)
+}
+
+original_celltypes <- sort(unique(unlist(pair_celltypes)))
+cat("\nCell-type vocabulary used in spatial_pair (the ORIGINAL Visium/RCTD/Jessberger-reference analysis, from 05-07):\n")
+print(original_celltypes)
+
+cat("\nCell-type vocabulary in starmap_hpc$top_level_cell_type (STARmap PLUS, raw):\n")
+print(sort(unique(starmap_hpc$top_level_cell_type)))
+
+cat("\nCell-type vocabulary in starmap_hpc$celltype_merged (STARmap PLUS, SMC+Endo merged to Vascular):\n")
+print(sort(unique(starmap_hpc$celltype_merged)))
+
+cat("\nCell-type vocabulary in starmap_hpc$sub_level_cell_type (STARmap PLUS, finer-grained):\n")
+print(sort(unique(starmap_hpc$sub_level_cell_type)))
+```
+
+Apart from `Vascular`, the Visium cell types (`GC`, `Neurogenic_lineage`, `Cajal-Retzius`, …) have no direct 1:1 match in STARmap's labels and need a manual mapping before any cell-type-specific comparison.
+
+```{r print-sig-pairs-detail}
+
+sig_pairs_present |>
+  arrange(spatial_pair) |>
+  select(spatial_pair, ligand_complex, receptor_complex)
+```
+
+## Export the usable LR pairs
+
+```{r export-sig-pairs}
+
+write.csv(sig_pairs_present, file.path(out_dir, "sig_pairs_present_starmap.csv"), row.names = FALSE)
+```
+
+## Normalize and export for bivariate Moran's I
+
+Log-normalization (`NormalizeData`) so Moran's I doesn't reflect sequencing depth.
+
+```{r load-and-normalize}
+starmap_hpc <- NormalizeData(starmap_hpc, verbose = FALSE)
+cat("starmap_hpc:", nrow(starmap_hpc), "genes x", ncol(starmap_hpc), "cells\n")
+```
+
+All 4 sections are exported together with a `section_id` (`time` x `replicate`); the Python notebooks build one spatial graph per section.
+
+```{r add-section-id}
+starmap_hpc$section_id <- paste(starmap_hpc$time, starmap_hpc$replicate, sep = "_")
+print(table(starmap_hpc$time, starmap_hpc$replicate))
+```
+
+Exported as matrix + CSVs and rebuilt as AnnData in Python.
+
+```{r export-for-python}
+export_dir <- file.path(out_dir, "starmap_hpc_export")
+dir.create(export_dir, recursive = TRUE, showWarnings = FALSE)
+
+norm_expr <- GetAssayData(starmap_hpc, layer = "data")  # log-normalized, genes (rows) x cells (cols), all 4 sections
+
+Matrix::writeMM(norm_expr, file.path(export_dir, "expr_norm.mtx"))
+writeLines(rownames(norm_expr), file.path(export_dir, "genes.txt"))
+writeLines(colnames(norm_expr), file.path(export_dir, "cells.txt"))
+
+coords <- as.data.frame(Embeddings(starmap_hpc, "spatial"))
+coords$cell_id <- rownames(coords)
+write.csv(coords, file.path(export_dir, "coordinates.csv"), row.names = FALSE)
+
+meta <- starmap_hpc@meta.data
+meta$cell_id <- rownames(meta)
+write.csv(meta, file.path(export_dir, "metadata.csv"), row.names = FALSE)
+
+# all panel-covered LR pairs (not restricted to a cell-type pair)
+lr_pairs_export <- unique(sig_pairs_present[, c("ligand_complex", "receptor_complex")])
+write.csv(lr_pairs_export, file.path(export_dir, "lr_pairs.csv"), row.names = FALSE)
+
+cat("Exported to:", export_dir, "\n")
+cat("Candidate LR pairs for the Moran's I screen:", nrow(lr_pairs_export), "\n")
+```
+
+## Notes
+
+- Only LR pairs whose genes are all on the panel can be tested in STARmap PLUS.
