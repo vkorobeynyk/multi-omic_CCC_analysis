@@ -186,19 +186,11 @@ n_cells_control <- metadata_all |> filter(label %in% panel_order) |> nrow()
 cat("Total cells in metadata.csv:", n_cells_total, "\n")
 cat("Cells in the 4 control samples:", n_cells_control, "(expected 35,771)\n\n")
 
-# which metadata column do the matrix column names correspond to?
+# matrix column names should all be metadata NAME values
 matrix_col_ids <- names(matrix_peek)[-1]
+name_hits      <- sum(matrix_col_ids %in% as.character(metadata_all$NAME))
 
-name_hits     <- sum(matrix_col_ids %in% as.character(metadata_all$NAME))
-composite_ids <- paste0(metadata_all$label, "_", metadata_all$NAME)
-composite_hits <- sum(matrix_col_ids %in% composite_ids)
-origidx_hits  <- sum(matrix_col_ids %in% as.character(metadata_all$orig_index))
-
-cat("Of", length(matrix_col_ids), "column IDs in the matrix header:\n")
-cat(" - matched metadata$NAME directly:", name_hits, "\n")
-cat(" - matched metadata's label_NAME composite:", composite_hits, "\n")
-cat(" - matched metadata$orig_index:", origidx_hits, "\n")
-cat("\nWhichever count is highest (ideally close to", length(matrix_col_ids), ") is the field to key on below.\n")
+cat("Matrix column IDs matching metadata$NAME:", name_hits, "/", length(matrix_col_ids), "\n")
 ```
 
 Matrix column headers match metadata's `NAME` column (unique across all sections); `orig_index` restarts in each section and must not be used as a key. Columns are selected by position, which is only valid if the matrix columns are in the same order as the metadata rows -- checked here, and the render stops if they aren't.

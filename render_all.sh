@@ -7,12 +7,16 @@
 #
 # .qmd files are rendered with Quarto (R). .ipynb notebooks are executed with
 # `quarto render --execute`, using the kernel saved in each notebook
-# (lianaPlus_localenv), so that kernel must be registered with Jupyter.
+# (lianaPlus_localenv; stlearn for 09b/10b), so those kernels must be registered with Jupyter.
 # Each render's full log goes to render_logs/<script>.log.
 
 set -euo pipefail
 
 cd "$(dirname "$0")"   # run from the project folder so relative output/ paths work
+
+# Use the same R as RStudio (4.5.2, which has all packages incl. hdf5r), not the
+# conda R that Quarto would otherwise pick up from PATH. Override by exporting QUARTO_R.
+export QUARTO_R="${QUARTO_R:-/opt/R/4.5.2/bin/R}"
 
 SCRIPTS=(
   01_processing_subset_to_HPC.qmd
@@ -27,6 +31,8 @@ SCRIPTS=(
   08_STARmapPLUS_CCC_GenePanelCheck.qmd
   09_STARmapPLUS_BivariateMoransI.ipynb
   10_STARmapPLUS_BivariateMoransI_AgeComparison.ipynb
+  09b_STARmapPLUS_stlearn.ipynb
+  10b_STARmapPLUS_stlearn_Age_comparison.ipynb
   11_Proteomics_LR_AgeTrends.qmd
 )
 

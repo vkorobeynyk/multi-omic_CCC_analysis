@@ -37,7 +37,8 @@ execute:
 
 ```{r setup}
 #| label: setup
-library(tidyverse)
+library(dplyr)
+library(tibble)
 
 if (!requireNamespace("STRINGdb", quietly = TRUE)) {
   if (!requireNamespace("BiocManager", quietly = TRUE)) install.packages("BiocManager")
@@ -48,7 +49,7 @@ library(STRINGdb)
 
 ## Load the curated significant-LR gene list
 
-Same source as `04_KEGG_PathwayConvergence.qmd`: `significant_lr_pairs.csv`, exported by `03_RCTD_SpotDeconvolution.qmd`'s "Export the curated (3-metric-agreement) significant LR pairs" section.
+Same source as `04_KEGG_PathwayConvergence.qmd`: `significant_lr_pairs.csv`, exported by `03c_crossModality_plots.qmd`'s "Export the curated (3-metric-agreement) significant LR pairs" section.
 
 ```{r load-lr-lists}
 #| label: load-lr-lists
@@ -58,7 +59,7 @@ split_complex <- function(x) stringr::str_split(x, "_")
 out_dir <- file.path("output", "05_STRING_NetworkAnalysis")
 dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
-sig_pairs <- readr::read_csv(file.path("output", "03_RCTD_SpotDeconvolution", "significant_lr_pairs.csv"), show_col_types = FALSE) %>%
+sig_pairs <- read.csv(file.path("output", "03c_crossModality_plots", "significant_lr_pairs.csv"), stringsAsFactors = FALSE) %>%
   distinct(spatial_pair, ligand_complex, receptor_complex)
 
 lr_gene_sets <- purrr::pmap(sig_pairs, function(spatial_pair, ligand_complex, receptor_complex) {
@@ -228,7 +229,7 @@ string_convergence_detail
 ```{r export-string-clusters}
 #| label: export-string-clusters
 
-write_csv(gene_cluster %>% dplyr::filter(!is.na(cluster)), file.path(out_dir, "string_gene_cluster.csv"))
+write.csv(gene_cluster %>% dplyr::filter(!is.na(cluster)), file.path(out_dir, "string_gene_cluster.csv"), row.names = FALSE)
 ```
 
 ## Full enrichment tables (whole network)
@@ -256,7 +257,7 @@ if (!is.na(cat_col)) {
 ```{r export-string-enrichment}
 #| label: export-string-enrichment
 
-write_csv(enrichment_all, file.path(out_dir, "string_whole_network_enrichment.csv"))
+write.csv(enrichment_all, file.path(out_dir, "string_whole_network_enrichment.csv"), row.names = FALSE)
 ```
 
 ## Network plot, coloured by cluster

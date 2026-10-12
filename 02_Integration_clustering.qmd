@@ -1,6 +1,6 @@
 ---
 title: "Merge, Integrate, and Cluster Hippocampus Visium Samples"
-subtitle: "Goal: identify anatomical subregions (GCL, ML, CA1, CA2, CA3, hilus, etc.)"
+subtitle: "Goal: identify anatomical subregions (ML, CA1_2, CA3, DG)"
 date: today
 format:
   html:
@@ -39,7 +39,6 @@ library(dplyr)
 library(purrr)
 library(ggplot2)
 library(patchwork)
-library(readr)
 ```
 
 ```{r paths}

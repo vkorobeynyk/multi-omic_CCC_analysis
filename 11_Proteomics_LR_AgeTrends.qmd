@@ -1,6 +1,6 @@
 ---
 title: "Proteomic Age Trends of Cross-Modality LR Genes"
-subtitle: "Do the LR genes change at protein level (mouse: Huang 2024; human subfields: Mol 2022) in the same direction as their pair's STARmap PLUS age shift?"
+subtitle: "Do the LR genes change with age at protein level? (mouse: Huang 2024; human subfields: Mol 2022)"
 date: today
 format:
   html:
@@ -32,11 +32,11 @@ execute:
 
 ## Overview
 
-Do the genes of the STARmap PLUS LR pairs change at the **protein** level with age in the same direction as their pair's STARmap age shift?
+Do the genes of the cross-modality LR pairs change with age at the **protein** level?
 
-- **LR pairs:** pairs from `03c` that are on the STARmap panel (`08`) and have a trustworthy age shift in bivariate Moran's I (`10`), grouped by that direction (8 → 13 months).
+- **LR pairs:** all significant pairs from `03c` (Visium + scRNA-seq agreement).
 - **Mouse proteomics** (`Proteomics_data/Huang_2024`): whole hippocampus, 3 vs 20 months, n = 5 per group, limma statistics from the paper.
-- **Human proteomics** (`Proteomics_data/Mol_2023`): 5 subfields (DG, CA1–CA4), age groups 1–10, 21–30, 31–40, 81–90 y; one pooled value per group, so descriptive only.
+- **Human proteomics** (`Proteomics_data/Mol_2022`): 5 subfields (DG, CA1–CA4), age groups 1–10, 21–30, 31–40, 81–90 y; one pooled value per group, so descriptive only.
 - All fold changes are **old vs young** (positive = higher in old). Mouse symbols are mapped to human by upper-casing.
 
 ```{r libraries}
@@ -50,16 +50,11 @@ library(readxl)
 out_dir <- file.path("output", "11_Proteomics_LR_AgeTrends")
 dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
-sig_pairs_path  <- file.path("output", "03_RCTD_SpotDeconvolution", "significant_lr_pairs.csv")        # 03c
-starmap_path    <- file.path("output", "10_STARmapPLUS_BivariateMoransI_AgeComparison", "bivariate_morans_age_shift.csv")  # 10
+sig_pairs_path  <- file.path("output", "03c_crossModality_plots", "significant_lr_pairs.csv")        # 03c
+starmap_pairs_path <- file.path("output", "08_STARmapPLUS_CCC_GenePanelCheck", "sig_pairs_present_starmap.csv")  # 08
 
 huang_path <- file.path("Proteomics_data", "Huang_2024", "pmic13786-sup-0003-tables1-s3.xlsx")
-mol_path   <- file.path("Proteomics_data", "Mol_2023", "sj-xlsx-2-omi-10.1089_omi.2022.0053.xlsx")
-
-# STARmap age direction of each pair (from 10's shift_direction), used to group and compare genes
-group_labels <- c("increase_with_age" = "STARmap: increases with age",
-                  "decrease_with_age" = "STARmap: decreases with age")
-mixed_label  <- "STARmap: mixed (gene in pairs going both ways)"
+mol_path   <- file.path("Proteomics_data", "Mol_2022", "sj-xlsx-2-omi-10.1089_omi.2022.0053.xlsx")
 
 # DG columns are TMT channels only (no age label); assumed AG1..AG4 like the other sheets
 dg_column_order <- c("AG1", "AG2", "AG3", "AG4")
@@ -67,83 +62,37 @@ dg_column_order <- c("AG1", "AG2", "AG3", "AG4")
 age_labels_human <- c(AG1 = "1-10 y", AG2 = "21-30 y", AG3 = "31-40 y", AG4 = "81-90 y")
 ```
 
-## LR pairs with a trustworthy STARmap age shift
+## LR genes
 
-```{r concordant-pairs}
+```{r lr-genes}
 sig_pairs <- read.csv(sig_pairs_path, stringsAsFactors = FALSE) |>
-  mutate(pair_label = paste(ligand_complex, "->", receptor_complex))
+  mutate(pair_label = paste(ligand_complex, "->", receptor_complex)) |>
+  distinct(spatial_pair, pair_label, ligand_complex, receptor_complex)
 
-starmap_shift <- read.csv(starmap_path, stringsAsFactors = FALSE) |>
-  mutate(trustworthy_shift = as.logical(trustworthy_shift)) |>
-  select(pair_label, starmap_delta = delta, starmap_dir = shift_direction, trustworthy_shift)
-
-# every 03c pair with its STARmap status
-pair_status <- sig_pairs |>
-  select(spatial_pair, pair_label, ligand_complex, receptor_complex) |>
-  left_join(starmap_shift, by = "pair_label") |>
-  mutate(
-    starmap_status = case_when(
-      is.na(starmap_dir) ~ "not on STARmap panel",
-      !trustworthy_shift ~ "STARmap shift not trustworthy",
-      TRUE               ~ "trustworthy STARmap shift"
-    )
-  )
-
-pair_status |> count(starmap_status)
-
-concordant_pairs <- pair_status |>
-  filter(starmap_status == "trustworthy STARmap shift") |>
-  mutate(group = unname(group_labels[starmap_dir]))
-
-cat("LR pairs kept:", n_distinct(concordant_pairs$pair_label), "\n")
-concordant_pairs |>
-  distinct(group, pair_label, starmap_delta) |>
-  arrange(group, desc(abs(starmap_delta)))
-
-write.csv(pair_status, file.path(out_dir, "lr_pair_concordance_status.csv"), row.names = FALSE)
-```
-
-```{r concordant-genes}
-stopifnot(nrow(concordant_pairs) > 0)
+cat("LR pairs:", n_distinct(sig_pairs$pair_label), "\n")
 
 # split complexes into subunit genes
 split_complex <- function(x) unlist(strsplit(x, "_"))
 
 lr_genes <- bind_rows(
-  lapply(seq_len(nrow(concordant_pairs)), function(i) {
-    p <- concordant_pairs[i, ]
+  lapply(seq_len(nrow(sig_pairs)), function(i) {
+    p <- sig_pairs[i, ]
     bind_rows(
       data.frame(gene = split_complex(p$ligand_complex),   role = "ligand"),
       data.frame(gene = split_complex(p$receptor_complex), role = "receptor")
-    ) |> mutate(pair_label = p$pair_label, spatial_pair = p$spatial_pair, group = p$group)
+    ) |> mutate(pair_label = p$pair_label, spatial_pair = p$spatial_pair)
   })
 ) |>
   distinct()
 
 gene_info <- lr_genes |>
   group_by(gene) |>
-  summarise(role  = paste(sort(unique(role)), collapse = "/"),
-            pairs = paste(unique(pair_label), collapse = "; "),
-            # a gene can sit in pairs whose STARmap shifts go opposite ways (e.g. Ptpra)
-            group = if (n_distinct(group) == 1) unique(group) else mixed_label,
+  summarise(role          = paste(sort(unique(role)), collapse = "/"),
+            pairs         = paste(unique(pair_label), collapse = "; "),
+            spatial_pairs = paste(sort(unique(spatial_pair)), collapse = "; "),
             .groups = "drop") |>
-  mutate(gene_human  = toupper(gene),
-         gene_label  = paste0(gene, " (", role, ")"),
-         starmap_sign = case_when(group == group_labels[["increase_with_age"]] ~  1,
-                                  group == group_labels[["decrease_with_age"]] ~ -1,
-                                  TRUE ~ NA_real_),
-         group = factor(group, levels = c(unname(group_labels), mixed_label)))
-
-# protein direction vs STARmap direction: "agrees" when both go up or both go down with age
-compare_to_starmap <- function(log2fc, starmap_sign, significant = TRUE) {
-  case_when(
-    is.na(starmap_sign)                   ~ "STARmap mixed",
-    is.na(log2fc)                         ~ "not detected",
-    !significant                          ~ "protein n.s.",
-    sign(log2fc) == starmap_sign          ~ "agrees with STARmap",
-    TRUE                                  ~ "opposite to STARmap"
-  )
-}
+  mutate(gene_human = toupper(gene),
+         gene_label = paste0(gene, " (", role, ")"))
 
 gene_info
 ```
@@ -175,10 +124,7 @@ huang_summary <- huang_genes |>
     TRUE                                       ~ "not significant"
   ))
 
-huang_summary <- huang_summary |>
-  mutate(vs_starmap = compare_to_starmap(log2fc_old_vs_young, starmap_sign, adj.P.Val < 0.05))
-
-huang_summary |> select(group, gene, role, pairs, log2fc_old_vs_young, adj.P.Val, status, vs_starmap)
+huang_summary |> select(gene, role, pairs, log2fc_old_vs_young, adj.P.Val, status)
 ```
 
 ```{r plot-huang-lollipop}
@@ -194,17 +140,15 @@ ggplot(huang_summary, aes(x = log2fc_old_vs_young,
   geom_segment(aes(x = 0, xend = log2fc_old_vs_young,
                    yend = reorder(gene_label, log2fc_old_vs_young)), linewidth = 1) +
   geom_point(size = 3.5) +
-  geom_text(aes(label = sprintf("log2FC %+.3f  adj.P %.3g  (%s)", log2fc_old_vs_young, adj.P.Val, vs_starmap)),
+  geom_text(aes(label = sprintf("log2FC %+.3f  adj.P %.3g", log2fc_old_vs_young, adj.P.Val)),
             vjust = -1.1, size = 3, color = "grey30") +
-  facet_grid(group ~ ., scales = "free_y", space = "free_y") +
   scale_color_manual(values = status_colors, name = NULL) +
   scale_y_discrete(expand = expansion(add = 0.8)) +
   labs(title = "Mouse hippocampus: protein-level age change of LR genes",
        subtitle = "Huang et al. 2024 -- 20 vs 3 months, n = 5 per group",
        x = "log2 fold change (old vs young)", y = NULL) +
   theme_minimal(base_size = 12) +
-  theme(legend.position = "bottom", panel.grid.minor = element_blank(),
-        strip.text.y = element_text(angle = 0))
+  theme(legend.position = "bottom", panel.grid.minor = element_blank())
 ```
 
 Per-sample intensities (5 per group):
@@ -218,13 +162,12 @@ huang_samples <- huang_genes |>
   pivot_longer(-gene, names_to = "sample", values_to = "log2_intensity") |>
   mutate(age = factor(sub("_\\d+$", "", sample), levels = c("young", "old"),
                       labels = c("3 months", "20 months"))) |>
-  left_join(gene_info |> select(gene, gene_label, group), by = "gene")
+  left_join(gene_info |> select(gene, gene_label), by = "gene")
 
 ggplot(huang_samples, aes(x = age, y = log2_intensity, color = age)) +
   geom_boxplot(outlier.shape = NA, width = 0.5, color = "grey50") +
   geom_point(position = position_jitter(width = 0.1, seed = 1), size = 2) +
-  facet_wrap(~ group + gene_label, scales = "free_y", ncol = 4,
-             labeller = label_wrap_gen(multi_line = TRUE)) +
+  facet_wrap(~ gene_label, scales = "free_y", ncol = 4) +
   scale_color_manual(values = c("3 months" = "#56B4E9", "20 months" = "#E69F00"), guide = "none") +
   labs(title = "Mouse hippocampus: per-sample protein intensity",
        x = NULL, y = "log2 TMT intensity") +
@@ -267,7 +210,7 @@ mol_long <- bind_rows(lapply(subfields, read_mol_subfield)) |>
   # reference = the youngest group (1-10 y), so each point reads as "this age vs young"
   mutate(log2_vs_AG1 = log2(abundance / abundance[age_group == "AG1"])) |>
   ungroup() |>
-  left_join(gene_info |> select(gene, gene_human, gene_label, role, group), by = "gene_human") |>
+  left_join(gene_info |> select(gene, gene_human, gene_label, role), by = "gene_human") |>
   mutate(subfield  = factor(subfield, levels = subfields),
          age_group = factor(age_group, levels = names(age_labels_human)))
 
@@ -280,26 +223,8 @@ if (length(missing_human) > 0) cat("Not detected in any subfield:", paste(missin
 # old (81-90 y) vs young (1-10 y), per subfield
 mol_long |>
   filter(age_group == "AG4") |>
-  select(group, gene, subfield, log2_AG4_vs_AG1 = log2_vs_AG1) |>
+  select(gene, subfield, log2_AG4_vs_AG1 = log2_vs_AG1) |>
   pivot_wider(names_from = subfield, values_from = log2_AG4_vs_AG1)
-```
-
-Sign of the human change (81–90 vs 1–10 y) vs the STARmap direction, per subfield (no test):
-  
-```{r mol-vs-starmap}
-mol_vs_starmap <- mol_long |>
-  filter(age_group == "AG4") |>
-  left_join(gene_info |> select(gene, starmap_sign), by = "gene") |>
-  mutate(vs_starmap = compare_to_starmap(log2_vs_AG1, starmap_sign))
-
-mol_vs_starmap |>
-  select(group, gene, subfield, vs_starmap) |>
-  pivot_wider(names_from = subfield, values_from = vs_starmap)
-
-mol_vs_starmap |>
-  filter(vs_starmap %in% c("agrees with STARmap", "opposite to STARmap")) |>
-  count(group, gene, vs_starmap) |>
-  pivot_wider(names_from = vs_starmap, values_from = n, values_fill = 0)
 ```
 
 One panel per gene:
@@ -313,7 +238,7 @@ ggplot(mol_long, aes(x = age_group, y = log2_vs_AG1, color = subfield, group = s
   geom_hline(yintercept = 0, color = "grey60", linetype = "dashed") +
   geom_line(linewidth = 0.8) +
   geom_point(size = 2) +
-  facet_wrap(~ group + gene_label, ncol = 3, labeller = label_wrap_gen(multi_line = TRUE)) +
+  facet_wrap(~ gene_label, ncol = 3) +
   scale_x_discrete(labels = age_labels_human) +
   scale_color_manual(values = subfield_colors, name = "Subfield") +
   labs(title = "Human hippocampal subfields: protein abundance across age",
@@ -332,7 +257,7 @@ One panel per subfield:
 # label each line at the oldest point, with its old-vs-young value
 end_labels <- mol_long |> filter(age_group == "AG4")
 
-ggplot(mol_long, aes(x = age_group, y = log2_vs_AG1, color = gene, group = gene, linetype = group)) +
+ggplot(mol_long, aes(x = age_group, y = log2_vs_AG1, color = gene, group = gene)) +
   geom_hline(yintercept = 0, color = "grey60", linetype = "dashed") +
   geom_line(linewidth = 0.8) +
   geom_point(size = 1.8) +
@@ -341,8 +266,7 @@ ggplot(mol_long, aes(x = age_group, y = log2_vs_AG1, color = gene, group = gene,
   facet_wrap(~ subfield, ncol = 3) +
   scale_x_discrete(labels = age_labels_human, expand = expansion(add = c(0.3, 1.2))) +
   labs(title = "Human hippocampal subfields: LR genes across age",
-       subtitle = "Line type = STARmap PLUS age direction of the gene's LR pair",
-       x = NULL, y = "log2 abundance vs 1-10 y", color = NULL, linetype = NULL) +
+       x = NULL, y = "log2 abundance vs 1-10 y", color = NULL) +
   theme_minimal(base_size = 11) +
   theme(axis.text.x = element_text(angle = 30, hjust = 1), legend.position = "bottom") +
   guides(color = "none")
@@ -355,39 +279,262 @@ Old vs young: mouse 20 vs 3 months (`*` = adj.P < 0.05) and each human subfield 
 
 ```{r plot-combined-heatmap}
 #| fig-height: !expr max(3.5, 0.4 * nrow(gene_info) + 2)
+#| fig-width: 10
 
 combined <- bind_rows(
   huang_summary |>
-    transmute(gene, gene_label, group, dataset = "Mouse HPC\n20 vs 3 mo", log2fc = log2fc_old_vs_young,
+    transmute(gene, gene_label, dataset = "Mouse HPC\n20 vs 3 mo", log2fc = log2fc_old_vs_young,
               star = ifelse(adj.P.Val < 0.05, "*", "")),
   mol_long |>
     filter(age_group == "AG4") |>
-    transmute(gene, gene_label, group, dataset = paste0("Human ", subfield, "\n81-90 vs 1-10 y"),
+    transmute(gene, gene_label, dataset = paste0("Human ", subfield, "\n81-90 vs\n1-10 y"),
               log2fc = log2_vs_AG1, star = "")
 ) |>
-  complete(nesting(gene, gene_label, group), dataset) |>
+  complete(nesting(gene, gene_label), dataset) |>
   mutate(dataset = factor(dataset, levels = c("Mouse HPC\n20 vs 3 mo",
-                                              paste0("Human ", subfields, "\n81-90 vs 1-10 y"))))
+                                              paste0("Human ", subfields, "\n81-90 vs\n1-10 y"))))
 
 lim <- max(abs(combined$log2fc), na.rm = TRUE)
 
 ggplot(combined, aes(x = dataset, y = gene_label, fill = log2fc)) +
   geom_tile(color = "white") +
   geom_text(aes(label = ifelse(is.na(log2fc), "", sprintf("%+.2f%s", log2fc, star))), size = 3) +
-  facet_grid(group ~ ., scales = "free_y", space = "free_y") +
   scale_fill_gradient2(low = "#0072B2", mid = "white", high = "#D55E00",
                        limits = c(-lim, lim), na.value = "grey85", name = "log2 FC\nold vs young") +
   labs(title = "Protein-level age change of LR genes (old vs young)", x = NULL, y = NULL) +
   theme_minimal(base_size = 11) +
-  theme(panel.grid = element_blank(), strip.text.y = element_text(angle = 0))
+  theme(panel.grid = element_blank(), axis.text.x = element_text(size = 8, lineheight = 0.9))
 
 write.csv(combined |> mutate(dataset = gsub("\n", " ", dataset)),
           file.path(out_dir, "lr_genes_protein_age_change.csv"), row.names = FALSE)
 ```
 
+## LR genes on the STARmap PLUS panel
+
+Same plots as above, restricted to the genes of the LR pairs that `08` found on the STARmap PLUS panel (the pairs tested in `09`/`10` and `09b`/`10b`).
+
+```{r starmap-genes}
+starmap_pairs <- read.csv(starmap_pairs_path, stringsAsFactors = FALSE) |>
+  mutate(pair_label = paste(ligand_complex, "->", receptor_complex)) |>
+  distinct(pair_label, ligand_complex, receptor_complex)
+
+starmap_genes <- unique(c(split_complex(starmap_pairs$ligand_complex),
+                          split_complex(starmap_pairs$receptor_complex)))
+
+gene_info_sp     <- gene_info     |> filter(gene %in% starmap_genes)
+huang_summary_sp <- huang_summary |> filter(gene %in% starmap_genes)
+huang_samples_sp <- huang_samples |> filter(gene %in% starmap_genes)
+mol_long_sp      <- mol_long      |> filter(gene %in% starmap_genes)
+combined_sp      <- combined      |> filter(gene %in% starmap_genes)
+
+cat("STARmap panel LR pairs:", nrow(starmap_pairs), "| genes:", length(starmap_genes),
+    "| in mouse proteome:", nrow(huang_summary_sp),
+    "| in >= 1 human subfield:", n_distinct(mol_long_sp$gene), "\n")
+gene_info_sp
+```
+
+### Mouse hippocampus (Huang et al. 2024)
+
+```{r plot-huang-lollipop-sp}
+#| fig-height: !expr max(3.5, 0.5 * nrow(huang_summary_sp) + 2)
+
+ggplot(huang_summary_sp, aes(x = log2fc_old_vs_young,
+                             y = reorder(gene_label, log2fc_old_vs_young), color = status)) +
+  geom_vline(xintercept = 0, color = "grey40") +
+  geom_segment(aes(x = 0, xend = log2fc_old_vs_young,
+                   yend = reorder(gene_label, log2fc_old_vs_young)), linewidth = 1) +
+  geom_point(size = 3.5) +
+  geom_text(aes(label = sprintf("log2FC %+.3f  adj.P %.3g", log2fc_old_vs_young, adj.P.Val)),
+            vjust = -1.1, size = 3, color = "grey30") +
+  scale_color_manual(values = status_colors, name = NULL) +
+  scale_y_discrete(expand = expansion(add = 0.8)) +
+  labs(title = "Mouse hippocampus: protein-level age change of STARmap-panel LR genes",
+       subtitle = "Huang et al. 2024 -- 20 vs 3 months, n = 5 per group",
+       x = "log2 fold change (old vs young)", y = NULL) +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "bottom", panel.grid.minor = element_blank())
+```
+
+```{r plot-huang-samples-sp}
+#| fig-height: !expr max(3.5, 2.6 * ceiling(nrow(huang_summary_sp) / 4))
+
+ggplot(huang_samples_sp, aes(x = age, y = log2_intensity, color = age)) +
+  geom_boxplot(outlier.shape = NA, width = 0.5, color = "grey50") +
+  geom_point(position = position_jitter(width = 0.1, seed = 1), size = 2) +
+  facet_wrap(~ gene_label, scales = "free_y", ncol = 4) +
+  scale_color_manual(values = c("3 months" = "#56B4E9", "20 months" = "#E69F00"), guide = "none") +
+  labs(title = "Mouse hippocampus: per-sample protein intensity (STARmap-panel LR genes)",
+       x = NULL, y = "log2 TMT intensity") +
+  theme_minimal(base_size = 11)
+```
+
+### Human hippocampal subfields (Mol et al. 2022)
+
+```{r plot-mol-by-gene-sp}
+#| fig-height: !expr max(3.5, 2.8 * ceiling(n_distinct(mol_long_sp$gene) / 3))
+
+ggplot(mol_long_sp, aes(x = age_group, y = log2_vs_AG1, color = subfield, group = subfield)) +
+  geom_hline(yintercept = 0, color = "grey60", linetype = "dashed") +
+  geom_line(linewidth = 0.8) +
+  geom_point(size = 2) +
+  facet_wrap(~ gene_label, ncol = 3) +
+  scale_x_discrete(labels = age_labels_human) +
+  scale_color_manual(values = subfield_colors, name = "Subfield") +
+  labs(title = "Human hippocampal subfields: STARmap-panel LR genes across age",
+       subtitle = "Mol et al. 2022 -- one pooled abundance per age group (n = 3 donors), descriptive only",
+       x = NULL, y = "log2 abundance vs 1-10 y") +
+  theme_minimal(base_size = 11) +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1), legend.position = "bottom")
+```
+
+```{r plot-mol-by-subfield-sp}
+#| fig-height: 7
+#| fig-width: 12
+
+end_labels_sp <- mol_long_sp |> filter(age_group == "AG4")
+
+ggplot(mol_long_sp, aes(x = age_group, y = log2_vs_AG1, color = gene, group = gene)) +
+  geom_hline(yintercept = 0, color = "grey60", linetype = "dashed") +
+  geom_line(linewidth = 0.8) +
+  geom_point(size = 1.8) +
+  geom_text(data = end_labels_sp, aes(label = sprintf("%s (%+.2f)", gene, log2_vs_AG1)),
+            hjust = -0.1, size = 2.8, show.legend = FALSE) +
+  facet_wrap(~ subfield, ncol = 3) +
+  scale_x_discrete(labels = age_labels_human, expand = expansion(add = c(0.3, 1.2))) +
+  labs(title = "Human hippocampal subfields: STARmap-panel LR genes across age",
+       x = NULL, y = "log2 abundance vs 1-10 y", color = NULL) +
+  theme_minimal(base_size = 11) +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1), legend.position = "bottom") +
+  guides(color = "none")
+```
+
+### Mouse and human side by side
+
+```{r plot-combined-heatmap-sp}
+#| fig-height: !expr max(3.5, 0.4 * nrow(gene_info_sp) + 2)
+#| fig-width: 10
+
+lim_sp <- max(abs(combined_sp$log2fc), na.rm = TRUE)
+
+ggplot(combined_sp, aes(x = dataset, y = gene_label, fill = log2fc)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = ifelse(is.na(log2fc), "", sprintf("%+.2f%s", log2fc, star))), size = 3) +
+  scale_fill_gradient2(low = "#0072B2", mid = "white", high = "#D55E00",
+                       limits = c(-lim_sp, lim_sp), na.value = "grey85", name = "log2 FC\nold vs young") +
+  labs(title = "Protein-level age change of STARmap-panel LR genes (old vs young)", x = NULL, y = NULL) +
+  theme_minimal(base_size = 11) +
+  theme(panel.grid = element_blank(), axis.text.x = element_text(size = 8, lineheight = 0.9))
+
+write.csv(combined_sp |> mutate(dataset = gsub("\n", " ", dataset)),
+          file.path(out_dir, "lr_genes_protein_age_change_starmap_panel.csv"), row.names = FALSE)
+```
+
+## Distribution of fold changes across all proteins
+
+Old vs young log2 fold change for **every** quantified protein, to see how large the LR-gene changes are compared with the whole proteome. Dashed lines = LR genes (all `03c` pairs); the text gives where the LR genes fall in each distribution.
+
+```{r all-proteins-mouse}
+#| fig-height: 4.5
+#| fig-width: 9
+
+huang_all <- huang |>
+  filter(!is.na(logFC)) |>
+  group_by(Genename) |>
+  slice_min(adj.P.Val, n = 1, with_ties = FALSE) |>
+  ungroup() |>
+  mutate(is_lr = Genename %in% gene_info$gene)
+
+q_mouse <- quantile(huang_all$logFC, c(0.025, 0.5, 0.975), na.rm = TRUE)
+cat(sprintf("Mouse: %d proteins | median log2FC %+.3f | central 95%%: [%+.3f, %+.3f] | adj.P < 0.05: %d\n",
+            nrow(huang_all), q_mouse[2], q_mouse[1], q_mouse[3], sum(huang_all$adj.P.Val < 0.05, na.rm = TRUE)))
+
+ggplot(huang_all, aes(x = logFC)) +
+  geom_histogram(bins = 100, fill = "grey70", color = NA) +
+  geom_vline(data = filter(huang_all, is_lr), aes(xintercept = logFC),
+             color = "#D55E00", linetype = "dashed", linewidth = 0.4) +
+  geom_vline(xintercept = 0, color = "grey30") +
+  labs(title = "Mouse hippocampus: log2 fold change of all proteins (20 vs 3 months)",
+       subtitle = sprintf("Huang et al. 2024 -- %d proteins; dashed = %d LR genes",
+                          nrow(huang_all), sum(huang_all$is_lr)),
+       x = "log2 fold change (old vs young)", y = "Proteins") +
+  theme_minimal(base_size = 11)
+```
+
+```{r all-proteins-human}
+#| fig-height: 6
+#| fig-width: 11
+
+# same parsing as read_mol_subfield(), without restricting to the LR genes
+read_mol_subfield_all <- function(sheet) {
+  df <- read_excel(mol_path, sheet = sheet, skip = 2)
+  abund_cols <- grep("^Abundances", names(df), value = TRUE)
+  has_label <- grepl("AG?\\s*[1-4]\\s*$", abund_cols)
+  age_group <- if (all(has_label)) paste0("AG", sub(".*AG?\\s*([1-4])\\s*$", "\\1", abund_cols)) else dg_column_order
+
+  df |>
+    select(gene_human = `Gene Symbol`, psms = `# PSMs`, all_of(abund_cols)) |>
+    rename_with(~ age_group, all_of(abund_cols)) |>
+    filter(!is.na(gene_human)) |>
+    group_by(gene_human) |>
+    slice_max(psms, n = 1, with_ties = FALSE) |>
+    ungroup() |>
+    mutate(AG1 = as.numeric(AG1), AG4 = as.numeric(AG4),
+           log2fc = log2(AG4 / AG1), subfield = sheet) |>
+    filter(is.finite(log2fc)) |>
+    select(subfield, gene_human, log2fc)
+}
+
+mol_all <- bind_rows(lapply(subfields, read_mol_subfield_all)) |>
+  mutate(subfield = factor(subfield, levels = subfields),
+         is_lr = gene_human %in% gene_info$gene_human)
+
+mol_all |>
+  group_by(subfield) |>
+  summarise(n_proteins = n(),
+            median = median(log2fc),
+            q025 = quantile(log2fc, 0.025), q975 = quantile(log2fc, 0.975),
+            n_lr = sum(is_lr), .groups = "drop") |>
+  mutate(across(c(median, q025, q975), ~ round(.x, 3)))
+
+ggplot(mol_all, aes(x = log2fc)) +
+  geom_histogram(bins = 80, fill = "grey70", color = NA) +
+  geom_vline(data = filter(mol_all, is_lr), aes(xintercept = log2fc),
+             color = "#D55E00", linetype = "dashed", linewidth = 0.3) +
+  geom_vline(xintercept = 0, color = "grey30") +
+  facet_wrap(~ subfield, ncol = 3, scales = "free_y") +
+  labs(title = "Human hippocampal subfields: log2 fold change of all proteins (81-90 vs 1-10 y)",
+       subtitle = "Mol et al. 2022 -- one pooled value per age group; dashed = LR genes",
+       x = "log2 fold change (old vs young)", y = "Proteins") +
+  theme_minimal(base_size = 11)
+```
+
+Where the LR genes sit in each distribution (percentile of their log2FC among all proteins; 50 = typical, near 0 or 100 = among the largest changes):
+
+```{r all-proteins-percentiles}
+lr_percentiles <- bind_rows(
+  huang_all |>
+    mutate(percentile = round(100 * rank(logFC) / n(), 1)) |>
+    filter(is_lr) |>
+    transmute(gene = Genename, dataset = "Mouse HPC", log2fc = logFC, percentile),
+  mol_all |>
+    group_by(subfield) |>
+    mutate(percentile = round(100 * rank(log2fc) / n(), 1)) |>
+    ungroup() |>
+    filter(is_lr) |>
+    left_join(gene_info |> select(gene, gene_human), by = "gene_human") |>
+    transmute(gene, dataset = paste("Human", subfield), log2fc, percentile)
+)
+
+lr_percentiles |>
+  select(-log2fc) |>
+  pivot_wider(names_from = dataset, values_from = percentile) |>
+  arrange(gene)
+
+write.csv(lr_percentiles, file.path(out_dir, "lr_genes_log2fc_percentile_vs_all_proteins.csv"), row.names = FALSE)
+```
+
 ## Notes
 
 - Moran's I measures spatial co-variation of a pair; proteomics measures the amount of one protein. Agreement in direction is supportive, not confirmation.
-- The STARmap LR pairs are not more spatially coupled than detection-matched random gene pairs (`10`, control-pair test), so the STARmap age directions are weak evidence.
 - Human data: one pooled value per age group, trends only.
 - Both datasets are bulk tissue: no cell-type attribution.

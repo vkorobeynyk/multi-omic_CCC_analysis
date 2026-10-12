@@ -1,0 +1,72 @@
+# One document for all evidence. Add to it over time, then run:  Rscript build_graph.R
+#
+# Each entry under `pairs:` becomes its own network in evidence_graph.html.
+#   evidence:  source (method/dataset node) -> gene, with
+#              effect: increase | decrease | no_change | not_detected   (sets the arrow colour)
+#              label:  text on the arrow
+#              report: HTML report opened when you click the arrow (path relative to the project folder)
+#              notes:  shown on hover
+#   stainings: status: planned | done   (planned = dashed)
+#              result / report / notes optional, like evidence
+
+pairs:
+  - name: Igfbpl1 -> Dcc
+    ligand: Igfbpl1
+    receptor: Dcc
+    sender: Neurogenic_lineage
+    receiver: GC
+    report: 03c_crossModality_plots.html
+    notes: Passed 3-way sign agreement in 03c
+    evidence:
+      - source: Visium
+        gene: Dcc
+        effect: decrease
+        label: decreases with age
+        report: 03a_RCTD_spotdeconvolution.html
+        notes: Spatial slope young -> old
+      - source: STARmap PLUS (Moran's I)
+        gene: Dcc
+        effect: increase
+        label: increases with age
+        report: 10_STARmapPLUS_BivariateMoransI_AgeComparison.html
+        notes: Not above detection-matched controls
+      - source: Proteomics (mouse)
+        gene: Dcc
+        effect: decrease
+        label: lower in old (adj.P < 0.05)
+        report: 11_Proteomics_LR_AgeTrends.html
+      - source: Proteomics (mouse)
+        gene: Igfbpl1
+        effect: not_detected
+        label: not detected
+        report: 11_Proteomics_LR_AgeTrends.html
+    stainings:
+      - name: IHC Igfbpl1 + Dcc
+        status: planned
+        genes: [Igfbpl1, Dcc]
+        notes: Young vs old DG sections; antibodies ordered
+
+  - name: Cxcl12 -> Itgb1
+    ligand: Cxcl12
+    receptor: Itgb1
+    sender: Vascular
+    receiver: Microglia
+    report: 03c_crossModality_plots.html
+    evidence:
+      - source: STARmap PLUS (stLearn)
+        gene: Cxcl12
+        effect: no_change
+        label: intermixed
+        report: 10b_STARmapPLUS_stlearn_Age_comparison.html
+      - source: Proteomics (mouse)
+        gene: Itgb1
+        effect: no_change
+        label: no change
+        report: 11_Proteomics_LR_AgeTrends.html
+    stainings:
+      - name: IHC Cxcl12 + Itgb1 + Iba1
+        status: done
+        genes: [Cxcl12, Itgb1]
+        effect: increase
+        label: higher in old
+        notes: FAKE example result -- more Cxcl12+ vessels next to microglia in old

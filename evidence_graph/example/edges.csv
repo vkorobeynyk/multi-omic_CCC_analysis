@@ -1,0 +1,11 @@
+from,to,type,effect,label,report,notes
+Igfbpl1,Dcc,interaction,,LR pair,03c_crossModality_plots.html,Passed 3-way sign agreement in 03c
+Cxcl12,Itgb1,interaction,,LR pair,03c_crossModality_plots.html,
+Visium,Dcc,evidence,decrease,decreases with age,03a_RCTD_spotdeconvolution.html,Spatial slope young -> old
+STARmap,Dcc,evidence,increase,increases with age,10_STARmapPLUS_BivariateMoransI_AgeComparison.html,Not above matched controls
+Proteomics,Igfbpl1,evidence,not_detected,not detected,11_Proteomics_LR_AgeTrends.html,Not in Huang 2024 proteome
+Proteomics,Dcc,evidence,decrease,lower in old (adj.P < 0.05),11_Proteomics_LR_AgeTrends.html,log2FC -0.12 mouse
+STARmap,Cxcl12,evidence,no_change,intermixed,10b_STARmapPLUS_stlearn_Age_comparison.html,
+Proteomics,Itgb1,evidence,no_change,no change,11_Proteomics_LR_AgeTrends.html,
+Staining_1,Igfbpl1,planned,,planned staining,,Antibodies ordered
+Staining_1,Dcc,planned,,planned staining,,

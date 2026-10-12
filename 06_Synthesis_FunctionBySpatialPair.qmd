@@ -44,7 +44,6 @@ Run `04` and `05` first.
 
 ```{r setup}
 library(dplyr)
-library(readr)
 library(tibble)
 library(ggplot2)
 ```
@@ -52,9 +51,8 @@ library(ggplot2)
 ## Load exports
 
 ```{r load-exports}
-kegg_gene_pathway     <- read_csv(file.path("output", "04_KEGG_PathwayConvergence", "kegg_gene_pathway_by_pair.csv"), show_col_types = FALSE)
-kegg_convergence      <- read_csv(file.path("output", "04_KEGG_PathwayConvergence", "kegg_convergence_pathways.csv"), show_col_types = FALSE)
-string_enrichment_all <- read_csv(file.path("output", "05_STRING_NetworkAnalysis", "string_whole_network_enrichment.csv"), show_col_types = FALSE)
+kegg_gene_pathway     <- read.csv(file.path("output", "04_KEGG_PathwayConvergence", "kegg_gene_pathway_by_pair.csv"), stringsAsFactors = FALSE)
+string_enrichment_all <- read.csv(file.path("output", "05_STRING_NetworkAnalysis", "string_whole_network_enrichment.csv"), stringsAsFactors = FALSE)
 ```
 
 `spatial_pair` per gene is rebuilt from `significant_lr_pairs.csv`.
@@ -62,7 +60,7 @@ string_enrichment_all <- read_csv(file.path("output", "05_STRING_NetworkAnalysis
 ```{r rebuild-lr-genes-long}
 split_complex <- function(x) stringr::str_split(x, "_")
 
-sig_pairs <- readr::read_csv(file.path("output", "03_RCTD_SpotDeconvolution", "significant_lr_pairs.csv"), show_col_types = FALSE) %>%
+sig_pairs <- read.csv(file.path("output", "03c_crossModality_plots", "significant_lr_pairs.csv"), stringsAsFactors = FALSE) %>%
   distinct(spatial_pair, ligand_complex, receptor_complex)
 
 lr_gene_sets <- purrr::pmap(sig_pairs, function(spatial_pair, ligand_complex, receptor_complex) {
@@ -239,7 +237,7 @@ string_id_to_group %>%
 
 ## Collapse KEGG pathways with identical gene evidence
 
-Hub genes (`Itgb1`, `App`, `Apoe`, …) sit in dozens of KEGG maps, many of them disease or infection maps, so the same few genes repeat across many pathways. Pathways with identical `spatial_pair`:gene evidence are merged into one row.
+Hub genes sit in dozens of KEGG maps, many of them disease or infection maps, so the same few genes repeat across many pathways. Pathways with identical `spatial_pair`:gene evidence are merged into one row.
 
 ```{r kegg-collapse}
 kegg_gene_level <- kegg_gene_pathway %>%
@@ -386,7 +384,7 @@ pair_summary
 
 ## Specificity of each function, corrected for gene-pool size
 
-Pairs have very different numbers of genes (Astrocyte-Vascular many, Neurogenic_lineage-GC few), so raw gene counts favour large pairs. For each function, each pair's **coverage** (its genes on the function / its total genes) is computed first, and `specificity_score` is that pair's share of the summed coverage. Contributions of a single gene are dropped.
+Pairs can have very different numbers of genes, so raw gene counts favour large pairs. For each function, each pair's **coverage** (its genes on the function / its total genes) is computed first, and `specificity_score` is that pair's share of the summed coverage. Contributions of a single gene are dropped.
 
 ```{r pair-gene-pools}
 pair_gene_pool_size <- lr_genes_long %>% dplyr::count(spatial_pair, name = "pool_size")
@@ -446,7 +444,7 @@ Functions hit by 2+ pairs that pass the spread filter. Colour and percentage = `
 ```{r heatmap-data}
 # column order; a pair left out here is only hidden from the plot
 spatial_pair_order <- c("Astrocyte-Vascular", "Vascular-Microglia",
-                         "OPC-Cajal-Retzius", "Neurogenic_lineage-GC")
+                         "OPC-Cajal.Retzius", "Neurogenic_lineage-GC")
 
 convergent_ids <- function_convergence %>%
   filter(n_spatial_pairs_hitting_it >= 2, function_id %in% differential_ids) %>%

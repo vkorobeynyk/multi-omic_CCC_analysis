@@ -33,7 +33,7 @@ execute:
 ## Overview
 
 1. **Gene panel check.** STARmap PLUS is a targeted panel (~2,800 genes). Keeps only the significant LR pairs from `03c` whose genes are all on the panel.
-2. **Export for Python.** Log-normalizes the hippocampus object from `07` and exports expression, coordinates, metadata and the LR pairs for the bivariate Moran's I test
+2. **Export for Python.** Log-normalizes the hippocampus object from `07` and exports expression, coordinates, metadata and the LR pairs for the bivariate Moran's I test.
 
 ```{r setup}
 library(dplyr)
@@ -54,7 +54,7 @@ Complexes (`_`) are split into their subunit genes.
 
 split_complex <- function(x) strsplit(x, "_")
 
-sig_pairs <- read.csv(file.path("output", "03_RCTD_SpotDeconvolution", "significant_lr_pairs.csv"), stringsAsFactors = FALSE) |>
+sig_pairs <- read.csv(file.path("output", "03c_crossModality_plots", "significant_lr_pairs.csv"), stringsAsFactors = FALSE) |>
   distinct(spatial_pair, ligand_complex, receptor_complex)
 
 lr_gene_sets <- purrr::pmap(sig_pairs, function(spatial_pair, ligand_complex, receptor_complex) {
@@ -167,7 +167,7 @@ if (length(bad_splits) > 0) {
 }
 
 original_celltypes <- sort(unique(unlist(pair_celltypes)))
-cat("\nCell-type vocabulary used in spatial_pair (the ORIGINAL Visium/RCTD/Jessberger-reference analysis, from 05-07):\n")
+cat("\nCell-type vocabulary used in spatial_pair (Visium/RCTD with the Jessberger scRNA-seq reference, 03a/03c):\n")
 print(original_celltypes)
 
 cat("\nCell-type vocabulary in starmap_hpc$top_level_cell_type (STARmap PLUS, raw):\n")
@@ -180,7 +180,7 @@ cat("\nCell-type vocabulary in starmap_hpc$sub_level_cell_type (STARmap PLUS, fi
 print(sort(unique(starmap_hpc$sub_level_cell_type)))
 ```
 
-Apart from `Vascular`, the Visium cell types (`GC`, `Neurogenic_lineage`, `Cajal-Retzius`, …) have no direct 1:1 match in STARmap's labels and need a manual mapping before any cell-type-specific comparison.
+Apart from `Vascular`, the Visium cell types (`GC`, `Neurogenic_lineage`, `Cajal.Retzius`, …) have no direct 1:1 match in STARmap's labels and need a manual mapping before any cell-type-specific comparison.
 
 ```{r print-sig-pairs-detail}
 

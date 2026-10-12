@@ -1,7 +1,7 @@
 # =============================================================================
 # helper_functions.R
 #
-# Shared functions for 03_RCTD_SpotDeconvolution.qmd.
+# Shared functions for 03a_RCTD_spotdeconvolution.qmd and 03c_crossModality_plots.qmd.
 # Source this at the top of the .qmd with: source("helper_functions.R")
 #
 # Sections:
@@ -13,6 +13,8 @@
 #   5. Ligand-receptor vs colocalization: core statistics
 #   6. Ligand-receptor vs colocalization: one-call-per-pair pipeline
 #   7. Plotting helpers (generic, reused across cell-type pairs)
+#   8. Cross-modality comparison: spatial LR-coloc pipeline vs LIANA+ scRNA CCC
+#   9. Spatial visualization of high/low colocalization spots
 # =============================================================================
 
 suppressPackageStartupMessages({
@@ -64,52 +66,6 @@ run_rctd_region <- function(sp_obj_sub, reference, max_cores = 4) {
 
   myRCTD <- create.RCTD(puck, reference, max_cores = max_cores)
   run.RCTD(myRCTD, doublet_mode = "full")
-}
-
-#' Export one sample's merged (across regions) coords/expression/weights for LIANA+ Moran's I
-#'
-#' Pulls every RCTD run belonging to one physical slide, takes the union of
-#' spots + real coordinates across regions (preserves true region-border
-#' adjacency), and writes matrix/features/barcodes/coords/weights files.
-export_rctd_slice <- function(sample_name, rctd_results, merged_obj, export_dir) {
-  runs <- rctd_results[sapply(rctd_results, function(r) r$sample == sample_name)]
-
-  coords_list <- lapply(runs, function(r) r$rctd_obj@spatialRNA@coords)
-  names(coords_list) <- NULL   # prevents do.call(rbind, ...) from prefixing rownames with list names
-
-  coords_all <- do.call(rbind, coords_list)
-  coords_all <- coords_all[!duplicated(rownames(coords_all)), ]
-  barcodes_all <- rownames(coords_all)
-
-  norm_expr <- GetAssayData(merged_obj, assay = "SCT", layer = "data")[, barcodes_all]
-
-  # weights from each region-run, merged by barcode — DG-only columns (GC, Neurogenic_lineage)
-  # will be NA for ML spots and vice versa; that's expected, since those cell types were
-  # never candidates in the other region
-  weights_list <- lapply(runs, function(r) {
-    w <- as.data.frame(as.matrix(normalize_weights(r$rctd_obj@results$weights)))
-    w$barcode <- rownames(w)
-    w
-  })
-  weights_sample <- Reduce(function(x, y) merge(x, y, by = "barcode", all = TRUE), weights_list)
-
-  region_df <- do.call(rbind, lapply(runs, function(r) {
-    data.frame(barcode = rownames(r$rctd_obj@spatialRNA@coords), region = r$region)
-  }))
-  weights_sample <- merge(weights_sample, region_df, by = "barcode", all.x = TRUE)
-
-  slice_dir <- file.path(export_dir, sample_name)
-  dir.create(slice_dir, showWarnings = FALSE)
-
-  Matrix::writeMM(as(norm_expr, "sparseMatrix"), file.path(slice_dir, "matrix.mtx"))
-  writeLines(rownames(norm_expr), file.path(slice_dir, "features.tsv"))
-  writeLines(colnames(norm_expr), file.path(slice_dir, "barcodes.tsv"))
-
-  write.csv(data.frame(barcode = rownames(coords_all), x = coords_all$x, y = coords_all$y),
-            file.path(slice_dir, "coords.csv"), row.names = FALSE)
-  write.csv(weights_sample, file.path(slice_dir, "weights.csv"), row.names = FALSE)
-
-  invisible(slice_dir)
 }
 
 # -----------------------------------------------------------------------------
@@ -243,7 +199,7 @@ spearman_cor <- function(x, y) {
 
 #' Colocalization strength for a pair of cell types: product of their RCTD
 #' weights, per spot. NA automatically where either cell type wasn't a
-#' candidate for that spot's region (e.g. Cajal-Retzius is ML-only), which
+#' candidate for that spot's region (e.g. Cajal.Retzius is ML-only), which
 #' is exactly the set of spots that should be excluded from the pair's
 #' downstream analysis.
 compute_coloc_strength <- function(weights_df, ct1, ct2) {
@@ -352,7 +308,7 @@ classify_pattern <- function(young, old) {
 #' Run the full LR x colocalization pipeline for one pair of cell types.
 #'
 #' This is the function that makes the analysis reusable across cell-type
-#' pairs (Astrocyte/Vascular, Vascular/Microglia, OPC/Cajal-Retzius, ...):
+#' pairs (Astrocyte/Vascular, Vascular/Microglia, OPC/Cajal.Retzius, ...):
 #' call it once per pair, then feed the returned pieces to the plotting
 #' helpers below.
 #'
@@ -373,7 +329,7 @@ run_lr_coloc_pipeline <- function(weights_df, expr_mat, lr_resource, ct1, ct2, n
   coloc_strength <- compute_coloc_strength(weights_df, ct1, ct2)
 
   # restrict to spots where BOTH cell types were valid RCTD candidates —
-  # drops NA automatically (e.g. Cajal-Retzius is only a candidate in ML,
+  # drops NA automatically (e.g. Cajal.Retzius is only a candidate in ML,
   # so DG spots are excluded here rather than crashing pcor.test downstream)
   barcodes_used <- intersect(names(coloc_strength)[!is.na(coloc_strength)], colnames(expr_mat))
   coloc_strength <- coloc_strength[barcodes_used]
@@ -665,7 +621,7 @@ plot_violin_by_age <- function(df, y_col, facet_col, title, y_lab, age_colors = 
 #' specificity_rank, age), and check 3-way sign agreement on the young-to-old
 #' shift across spatial slope, spatial detection enrichment, and scRNA evidence.
 compare_spatial_to_liana <- function(spatial_result, liana_csv_path) {
-  liana_by_age <- read_csv(liana_csv_path, show_col_types = FALSE) %>%
+  liana_by_age <- read.csv(liana_csv_path, stringsAsFactors = FALSE) %>%
     mutate(pair = paste0(ligand_complex, "-", receptor_complex))
 
   # a pair can appear twice per age (both interaction directions, e.g.
@@ -806,7 +762,7 @@ classify_coloc_quartile <- function(coloc_strength, age_vec) {
 #' Spatial plot of one sample's spots, colored by top/bottom colocalization
 #' quartile for a given cell-type-pair pipeline result. Automatically
 #' restricted to whichever spots that pipeline actually used (e.g. ML-only
-#' for OPC-Cajal-Retzius), since coloc_strength is NA everywhere else.
+#' for OPC-Cajal.Retzius), since coloc_strength is NA everywhere else.
 plot_coloc_spatial <- function(sample_id, spatial_result, merged_obj, regions = c("DG", "ML")) {
   sp_sub <- subset(merged_obj, subset = sample == sample_id & region %in% regions)
 

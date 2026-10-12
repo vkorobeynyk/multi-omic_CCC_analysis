@@ -1,0 +1,9 @@
+id,label,type,description
+Igfbpl1,Igfbpl1,gene,Ligand; Neurogenic_lineage -> GC candidate pair
+Dcc,Dcc,gene,Receptor of Igfbpl1
+Cxcl12,Cxcl12,gene,Ligand; Vascular -> Microglia candidate pair
+Itgb1,Itgb1,gene,Receptor of Cxcl12
+Visium,Visium,method,LR co-expression vs RCTD colocalisation across age (03a/03c)
+STARmap,STARmap PLUS,method,Bivariate Moran's I / stLearn across age (09/10/09b/10b)
+Proteomics,Proteomics,method,Huang 2024 mouse + Mol 2022 human (11)
+Staining_1,IHC Igfbpl1 + Dcc,staining,Planned: young vs old DG sections

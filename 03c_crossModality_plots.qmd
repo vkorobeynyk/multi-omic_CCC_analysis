@@ -39,7 +39,6 @@ suppressPackageStartupMessages({
   library(ggplot2)
   library(purrr)
   library(tidyr)
-  library(readr)
   library(tibble)
   library(patchwork)
   library(forcats)
@@ -50,14 +49,16 @@ source("helper_functions.R")
 ```
 
 ```{r paths}
-out_dir   <- file.path("output", "03_RCTD_SpotDeconvolution") 
-liana_dir <- file.path("output", "03b_runLiana_scRNAseq") 
+rctd_dir  <- file.path("output", "03a_RCTD_spotdeconvolution")
+liana_dir <- file.path("output", "03b_runLiana_scRNAseq")
+out_dir   <- file.path("output", "03c_crossModality_plots")
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 ```
 
 ## Load the spatial pipeline results from 03a
 
 ```{r load-spatial-pipelines}
-lr_coloc_pipelines <- readRDS(file.path(out_dir, "lr_coloc_pipelines.rds"))
+lr_coloc_pipelines <- readRDS(file.path(rctd_dir, "lr_coloc_pipelines.rds"))
 
 astro_vasc     <- lr_coloc_pipelines$astro_vasc
 vasc_microglia <- lr_coloc_pipelines$vasc_microglia
@@ -97,7 +98,7 @@ plot_cross_modality_trajectory(vasc_microglia_liana,
 vasc_microglia_liana$pair_detail_wide
 ```
 
-## OPC - Cajal-Retzius
+## OPC - Cajal.Retzius
 
 ```{r liana-compare-opc-cr, warning=FALSE, fig.height=10, fig.width=10}
 opc_cr_liana <- compare_spatial_to_liana(opc_cr, file.path(liana_dir, "liana_opc_cr_by_age.csv"))
@@ -106,7 +107,7 @@ opc_cr_liana$pairs_dropped_incomplete
 opc_cr_liana$agreement_check
 
 plot_cross_modality_trajectory(opc_cr_liana,
-                                "OPC-Cajal-Retzius: spatial and scRNA evidence moving together with age")
+                                "OPC-Cajal.Retzius: spatial and scRNA evidence moving together with age")
 
 opc_cr_liana$pair_detail_wide
 ```
@@ -133,7 +134,7 @@ The four `pair_detail_wide` tables above are already restricted to the pairs whe
 significant_lr_pairs <- bind_rows(
   astro_vasc_liana$pair_detail_wide     %>% mutate(spatial_pair = "Astrocyte-Vascular"),
   vasc_microglia_liana$pair_detail_wide %>% mutate(spatial_pair = "Vascular-Microglia"),
-  opc_cr_liana$pair_detail_wide         %>% mutate(spatial_pair = "OPC-Cajal-Retzius"),
+  opc_cr_liana$pair_detail_wide         %>% mutate(spatial_pair = "OPC-Cajal.Retzius"),
   neuro_gc_liana$pair_detail_wide       %>% mutate(spatial_pair = "Neurogenic_lineage-GC")
 ) %>%
   dplyr::select(spatial_pair, pair, ligand_complex, receptor_complex,

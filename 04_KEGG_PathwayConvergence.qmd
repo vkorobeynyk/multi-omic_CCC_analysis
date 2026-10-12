@@ -1,6 +1,6 @@
 ---
 title: "KEGG Pathway-Map Convergence Across the Four Significant LR Lists"
-subtitle: "Does any other significant pair belong to a real, named KEGG diagram?"
+subtitle: "Do genes from different cell-type pairs' significant LR lists belong to the same named KEGG pathway?"
 date: today
 format:
   html:
@@ -32,11 +32,12 @@ execute:
 
 ## Overview
 
-This notebook asks: does a gene from one of the four significant-LR lists belong to a **curated KEGG pathway diagram** -- and if so, does a gene from a *different* cell-type-pair's list also belong to that same diagram?.
+This notebook asks: does a gene from one of the four significant-LR lists belong to a **curated KEGG pathway diagram** -- and if so, does a gene from a *different* cell-type-pair's list also belong to that same diagram?
 
 ```{r setup}
 #| label: setup
-library(tidyverse)
+library(dplyr)
+library(tibble)
 
 if (!requireNamespace("KEGGREST", quietly = TRUE)) {
   if (!requireNamespace("BiocManager", quietly = TRUE)) install.packages("BiocManager")
@@ -82,10 +83,8 @@ resolve_kegg_gene_id <- function(gene_symbol, organism = "mmu") {
 }
 
 #' Full mouse pathway id -> name lookup table, fetched once and cached
-#' (one API call returns all ~560 mouse pathways; joining against this
-#' locally is far more robust than querying KEGG per-pathway-id -- KEGG's
-#' /list endpoint 404s on a specific "path:mmuXXXXX" entry, confirmed by
-#' testing directly against the live API before relying on it here).
+#' (one API call returns all mouse pathways; KEGG's /list endpoint 404s on a
+#' single "path:mmuXXXXX" entry, so names are joined locally instead).
 get_mmu_pathway_names <- function() {
   cache_key <- "mmu_pathway_names_table"
   if (!is.null(kegg_cache[[cache_key]])) return(kegg_cache[[cache_key]])
@@ -127,16 +126,16 @@ get_kegg_pathways <- function(gene_symbol, organism = "mmu") {
 
 ## Load the four significant-LR lists
 
-Reads `significant_lr_pairs.csv`, exported by `03c_crossModality_plots.qmd`'s where exactly the pairs where spatial slope, spatial detection enrichment, and scRNA `magnitude_rank` all agree in sign on their young-to-old shift -- the same pairs shown in the `plot_cross_modality_trajectory()` plots.
+Reads `significant_lr_pairs.csv`, exported by `03c_crossModality_plots.qmd`: the pairs where spatial slope, spatial detection enrichment, and scRNA `magnitude_rank` all agree in sign on their young-to-old shift (the pairs shown in 03c's `plot_cross_modality_trajectory()` plots).
 
 ```{r load-lr-lists}
 #| label: load-lr-lists
 
 # Named only for display / for the pathview color-coding step further down 
 spatial_pair_labels <- c("Astrocyte-Vascular", "Vascular-Microglia",
-                          "OPC-Cajal-Retzius", "Neurogenic_lineage-GC")
+                          "OPC-Cajal.Retzius", "Neurogenic_lineage-GC")
 
-sig_pairs <- readr::read_csv(file.path("output", "03_RCTD_SpotDeconvolution", "significant_lr_pairs.csv"), show_col_types = FALSE) %>%
+sig_pairs <- read.csv(file.path("output", "03c_crossModality_plots", "significant_lr_pairs.csv"), stringsAsFactors = FALSE) %>%
   distinct(spatial_pair, ligand_complex, receptor_complex)
 
 # Complexes come through as e.g. "GeneA_GeneB" -- split those into individual
@@ -223,8 +222,8 @@ Used in `06_Synthesis_FunctionBySpatialPair.qmd`, which combines this notebook's
 ```{r export-kegg-synthesis}
 #| label: export-kegg-synthesis
 
-write_csv(gene_pathway_by_pair, file.path(out_dir, "kegg_gene_pathway_by_pair.csv"))
-write_csv(convergence_pathways, file.path(out_dir, "kegg_convergence_pathways.csv"))
+write.csv(gene_pathway_by_pair, file.path(out_dir, "kegg_gene_pathway_by_pair.csv"), row.names = FALSE)
+write.csv(convergence_pathways, file.path(out_dir, "kegg_convergence_pathways.csv"), row.names = FALSE)
 ```
 
 
@@ -246,13 +245,11 @@ if (!requireNamespace("org.Mm.eg.db", quietly = TRUE)) BiocManager::install("org
 library(pathview)   
 library(org.Mm.eg.db) 
 
-data(bods, package = "pathview")
-data(korg, package = "pathview")
 ```
 
 ```{r pathview-render}
 #| label: pathview-render
-#| eval: false
+#| eval: true
 
 # Example: render the top convergence pathway from the table above.
 target_pathway_id <- stringr::str_remove(convergence_pathways$pathway_id[1], "^mmu")
@@ -315,4 +312,5 @@ tryCatch(
 )
 # Produces mmu<target_pathway_id>.convergence.png in out_dir --
 # the official KEGG diagram with your genes colored by contributing list.
+knitr::include_graphics(file.path(out_dir, paste0("mmu", target_pathway_id, ".convergence.png")))
 ```
