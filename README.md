@@ -49,16 +49,6 @@ All analyses are Quarto documents (`.qmd`, R) or Jupyter notebooks (`.ipynb`, Py
 
 `helper_functions.R` holds the shared functions for 03a and 03c.
 
-### Flow
-
-```
-01 → 02 → 03a ─┬─────────────→ 03c → 04 → 05 → 06
-               └→ 03b (scRNA) ─┘     │
-                                     ├→ 08 → 09 / 10 (Moran's I)
-                         07 ─────────┘    └→ 09b / 10b (stLearn)
-                                     └→ 11 (proteomics)
-```
-
 ---
 
 ## Data
