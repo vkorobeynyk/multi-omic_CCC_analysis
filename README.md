@@ -22,8 +22,7 @@ Candidate pairs are first selected from Visium + scRNA-seq, then checked in STAR
 Vladyslav Korobeynyk, HIFO / DMLS, University of Zurich (Jessberger lab / Mark D. Robinson lab)
 
 ## Generative AI statement
-Generative AI was used throughout this entire benchmark to make code nicer to read and more efficient. The entire logic of the benchmark was created by myself and I assume responsability of the content within this repo.
-
+Generative AI was used throughout this entire work here to generate code. The entire logic of the benchmark was created by myself and I assume responsability of the content within this repo.
 
 ## Pipeline
 
