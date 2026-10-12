@@ -1,6 +1,6 @@
 # Multi-omic cell–cell communication in the ageing mouse hippocampus
 
-**🔗 Reports and evidence graph online: https://vkorobeynyk.github.io/multi-omic_CCC_analysys/**
+**🔗 Reports and evidence graph online: https://vkorobeynyk.github.io/multi-omic_CCC_analysis/**
 
 Which ligand–receptor (LR) interactions between hippocampal cell types change with age, and how consistent is that change across technologies?
 
