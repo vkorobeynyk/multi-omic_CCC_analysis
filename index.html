@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Multi-omic CCC – hippocampus ageing</title>
+<style>
+  body { font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; color: #222; background: #fff;
+         max-width: 860px; margin: 40px auto; padding: 0 16px; line-height: 1.5; }
+  h1 { font-size: 1.6em; margin-bottom: 0.2em; }
+  .sub { color: #555; margin-top: 0; }
+  .card { display: block; border: 1px solid #d0d7de; border-left: 4px solid #2a78d6; border-radius: 6px;
+          padding: 14px 18px; margin: 24px 0; text-decoration: none; color: inherit; background: #f6f8fb; }
+  .card:hover { background: #eef3fa; }
+  .card b { font-size: 1.1em; color: #2a78d6; }
+  h2 { font-size: 1.15em; margin-top: 32px; border-bottom: 1px solid #e5e5e5; padding-bottom: 4px; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.95em; }
+  td { padding: 5px 8px; border-bottom: 1px solid #eee; vertical-align: top; }
+  td:first-child { white-space: nowrap; color: #666; width: 3em; }
+  a { color: #2a78d6; }
+</style>
+</head>
+<body>
+
+<h1>Multi-omic cell–cell communication in the ageing mouse hippocampus</h1>
+<p class="sub">Visium · scRNA-seq · STARmap PLUS · proteomics</p>
+
+<a class="card" href="evidence_graph/evidence_graph.html">
+  <b>Evidence graph →</b><br>
+  One network per candidate ligand–receptor pair, with the results from every technology, the overall verdict,
+  literature and links to the reports below.
+</a>
+
+<h2>Visium and scRNA-seq</h2>
+<table>
+  <tr><td>01</td><td><a href="01_processing_subset_to_HPC.html">QC and hippocampus selection</a></td></tr>
+  <tr><td>02</td><td><a href="02_Integration_clustering.html">Integration and clustering</a></td></tr>
+  <tr><td>03a</td><td><a href="03a_RCTD_spotdeconvolution.html">RCTD deconvolution and LR colocalisation across age</a></td></tr>
+  <tr><td>03b</td><td><a href="03b_runLiana_scRNAseq.html">LIANA+ on scRNA-seq, per age</a></td></tr>
+  <tr><td>03c</td><td><a href="03c_crossModality_plots.html">Cross-modality comparison (spatial vs scRNA-seq)</a></td></tr>
+</table>
+
+<h2>Functional context</h2>
+<table>
+  <tr><td>04</td><td><a href="04_KEGG_PathwayConvergence.html">KEGG pathway convergence</a></td></tr>
+  <tr><td>05</td><td><a href="05_STRING_NetworkAnalysis.html">STRING network analysis</a></td></tr>
+  <tr><td>06</td><td><a href="06_Synthesis_FunctionBySpatialPair.html">Synthesis: function by cell-type pair</a></td></tr>
+</table>
+
+<h2>STARmap PLUS</h2>
+<table>
+  <tr><td>07</td><td><a href="07_STARmapPLUS_ControlSpatialObject.html">Control spatial object</a></td></tr>
+  <tr><td>08</td><td><a href="08_STARmapPLUS_CCC_GenePanelCheck.html">Gene panel check</a></td></tr>
+  <tr><td>09</td><td><a href="09_STARmapPLUS_BivariateMoransI.html">Bivariate Moran's I (liana+)</a></td></tr>
+  <tr><td>10</td><td><a href="10_STARmapPLUS_BivariateMoransI_AgeComparison.html">Moran's I across age, with random-pair controls</a></td></tr>
+  <tr><td>09b</td><td><a href="09b_STARmapPLUS_stlearn.html">stLearn</a></td></tr>
+  <tr><td>10b</td><td><a href="10b_STARmapPLUS_stlearn_Age_comparison.html">stLearn across age</a></td></tr>
+</table>
+
+<h2>Proteomics</h2>
+<table>
+  <tr><td>11</td><td><a href="11_Proteomics_LR_AgeTrends.html">Protein-level age trends of the LR genes (mouse and human)</a></td></tr>
+</table>
+
+</body>
+</html>

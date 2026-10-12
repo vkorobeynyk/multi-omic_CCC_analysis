@@ -1,5 +1,7 @@
 # Multi-omic cell–cell communication in the ageing mouse hippocampus
 
+**🔗 Reports and evidence graph online: https://vkorobeynyk.github.io/multi-omic_CCC_analysys/**
+
 Which ligand–receptor (LR) interactions between hippocampal cell types change with age, and how consistent is that change across technologies?
 
 This repository combines four independent data types:
@@ -14,6 +16,14 @@ This repository combines four independent data types:
 Candidate pairs are first selected from Visium + scRNA-seq, then checked in STARmap PLUS and proteomics. The results for each candidate pair are collected in an interactive **evidence graph** (see [Evidence graph](#evidence-graph)).
 
 ---
+
+## Contact
+
+Vladyslav Korobeynyk, HIFO / DMLS, University of Zurich (Jessberger lab / Mark D. Robinson lab)
+
+## Generative AI statement
+Generative AI was used throughout this entire benchmark to make code nicer to read and more efficient. The entire logic of the benchmark was created by myself and I assume responsability of the content within this repo.
+
 
 ## Pipeline
 
