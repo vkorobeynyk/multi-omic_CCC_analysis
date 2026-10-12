@@ -1,6 +1,6 @@
 # Multi-omic cell–cell communication in the ageing mouse hippocampus
 
-**🔗 Reports and evidence graph online: https://vkorobeynyk.github.io/multi-omic_CCC_analysys/**
+**🔗 Reports and evidence graph online: https://vkorobeynyk.github.io/multi-omic_CCC_analysis/**
 
 Which ligand–receptor (LR) interactions between hippocampal cell types change with age, and how consistent is that change across technologies?
 
@@ -158,3 +158,9 @@ The details, numbers and caveats are in `evidence_graph/`.
 - Cable DM, et al. Robust decomposition of cell type mixtures in spatial transcriptomics (RCTD). *Nat Biotechnol* 2022. https://doi.org/10.1038/s41587-021-00830-w
 - Dimitrov D, et al. LIANA+ provides an all-in-one framework for cell–cell communication inference. *Nat Cell Biol* 2024. https://doi.org/10.1038/s41556-024-01469-w
 - Pham D, et al. Robust mapping of spatiotemporal trajectories and cell–cell interactions in healthy and diseased tissues (stLearn). *Nat Commun* 2023. https://doi.org/10.1038/s41467-023-43120-6
+
+---
+
+## License
+
+The code in this repository is licensed under the GNU General Public License v3.0; see [LICENSE](LICENSE). The third-party datasets (STARmap PLUS, Huang et al. 2024, Mol et al. 2022) are covered by their original terms.
