@@ -11,7 +11,6 @@ STARmap_PLUS_data/
 *.h5ad
 
 # ---- Rendered reports and Quarto/R/Jupyter leftovers ----
-*.html
 *_files/
 .quarto/
 *.rmarkdown
