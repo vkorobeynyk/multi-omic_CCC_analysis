@@ -1,6 +1,6 @@
-# Multi-omic cell–cell communication in the ageing mouse hippocampus
+# Multimodal cell–cell communication in the ageing mouse hippocampus
 
-**🔗 Reports and evidence graph online: https://vkorobeynyk.github.io/multi-omic_CCC_analysis/**
+**🔗 Reports and evidence graph online: https://vkorobeynyk.github.io/multimodal_CCC_hippocampus_aging/**
 
 Which ligand–receptor (LR) interactions between hippocampal cell types change with age, and how consistent is that change across technologies?
 
@@ -11,7 +11,7 @@ This repository combines four independent data types:
 | **Visium** (spot-based spatial transcriptomics) | In-house, young / middle / old mouse hippocampus (16 sections) | Cell-type colocalisation (RCTD) and LR co-expression across age |
 | **scRNA-seq** | In-house hippocampus reference (Jessberger lab) | Cell-type-resolved LR scores per age (LIANA+) |
 | **STARmap PLUS** (single-cell spatial) | Zeng et al., *Nat Neurosci* 2023 (SCP1375), control mice, 8 and 13 months | Independent spatial test of the candidate pairs (liana+ bivariate Moran's I, stLearn) |
-| **Proteomics** | Huang et al. 2024 (mouse, 3 vs 20 months); Mol et al. 2022 (human hippocampal subfields, 1–10 to 81–90 y) | Protein-level age change of the LR genes |
+| **Proteomics** | Huang et al. 2024 (mouse, 3 vs 20 months); Mol et al. 2022 (human hippocampal subfields, 1–10 to 81–90 y) | Protein-level age change of the LR genes, taken from the published result tables (no re-analysis of raw proteomics data) |
 
 Candidate pairs are first selected from Visium + scRNA-seq, then checked in STARmap PLUS and proteomics. The results for each candidate pair are collected in an interactive **evidence graph** (see [Evidence graph](#evidence-graph)).
 
